@@ -11,7 +11,8 @@ Usage:
 
 import sys
 import os
-import openpyxl
+import re
+import xml.etree.ElementTree as ET
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -57,62 +58,87 @@ def _set(cell, value, bg=None, size=10, bold=False, color="212121",
 
 def parse_file(filepath):
     """
-    Parse SAP output Excel file into two flat lists:
-      header_rows: all rows where TextTypeCode (J) is populated
-      line_rows:   all rows where LineItemNumber is populated
-    Column lookup is done by header name (row 1), not letter,
-    so it works regardless of column shifts between ECC and S4.
+    Parse SAP XML/HTML output file into two flat lists:
+      header_rows: one entry per HeaderFreeText (TextTypeCode + Text)
+      line_rows:   one entry per ItemAmountsCharges within each LineItemInformation
+    Namespace prefixes are stripped before parsing so tag names work regardless
+    of which SAP system produced the file.
     """
-    wb = openpyxl.load_workbook(filepath, data_only=True)
-    ws = wb.active
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
 
-    # col name -> 1-based index, from row 1
-    col_map = {}
-    for cell in ws[1]:
-        if cell.value is not None:
-            col_map[str(cell.value).strip()] = cell.column
+    # Strip XML namespace declarations and prefixes from tags
+    content = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', '', content)
+    content = re.sub(r'<([\w.-]+):([\w.-]+)', r'<\2', content)
+    content = re.sub(r'</([\w.-]+):([\w.-]+)', r'</\2', content)
 
-    def _get(row, col_name):
-        if col_name in col_map:
-            idx = col_map[col_name] - 1
-            if idx < len(row):
-                v = row[idx].value
-                return str(v).strip() if v is not None else None
-        return None
+    root = ET.fromstring(content)
+
+    def _text(node, tag):
+        el = node.find(f".//{tag}")
+        return el.text.strip() if el is not None and el.text else None
 
     header_rows = []
     line_rows   = []
 
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
-        if not any(c.value for c in row):
-            continue
-
-        # Header row: TextTypeCode (J) is populated
-        text_type = _get(row, "TextTypeCode")
+    for hft in root.findall(".//HeaderFreeText"):
+        text_type = _text(hft, "TextTypeCode")
         if text_type:
             header_rows.append({
                 "field":   text_type,
-                "value":   _get(row, "Text") or "",
-                "row_num": row[0].row,
+                "value":   _text(hft, "Text") or "",
+                "row_num": None,
             })
 
-        # Line item row: LineItemNumber is populated
-        line_num = _get(row, "LineItemNumber")
-        if line_num:
-            line_rows.append({
-                "line_num":      line_num,
-                "material_num":  _get(row, "MaterialNumber"),
-                "material_desc": _get(row, "MaterialDescription"),
-                "product_desc":  _get(row, "ProductDescription"),
-                "discount_amt":  _get(row, "LineItemDiscountAmount"),
-                "charge_type":   _get(row, "ChargeTypeCode"),
-                "description":   _get(row, "Description"),
-                "amount":        _get(row, "Amount"),
-                "net_weight":    _get(row, "NetWeight"),
-                "row_num":       row[0].row,
-            })
+    for li in root.findall(".//LineItemInformation"):
+        line_num     = _text(li, "LineItemNumber")
+        material_num = _text(li, "MaterialNumber")
+        material_desc= _text(li, "MaterialDescription")
+        product_desc = _text(li, "ProductDescription")
+        discount_amt = _text(li, "LineItemDiscountAmount")
+        net_weight   = _text(li, "NetWeight")
+
+        for iac in li.findall("ItemAmountsCharges"):
+            if line_num:
+                line_rows.append({
+                    "line_num":      line_num,
+                    "material_num":  material_num,
+                    "material_desc": material_desc,
+                    "product_desc":  product_desc,
+                    "discount_amt":  discount_amt,
+                    "charge_type":   _text(iac, "ChargeTypeCode"),
+                    "description":   _text(iac, "Description"),
+                    "amount":        _text(iac, "Amount"),
+                    "net_weight":    net_weight,
+                    "row_num":       None,
+                })
 
     return header_rows, line_rows
+
+
+# ─── Date Validation ──────────────────────────────────────────────────────────
+
+DATE_FIELDS = {"SODate", "DateAsoc", "From", "to"}
+
+def check_dates(header_rows):
+    """
+    For header fields that should be YYYYMMDD, return a list of
+    {field, value, source} dicts for any that fail validation.
+    'source' is passed in by the caller so the UI can label ECC vs S4.
+    """
+    issues = []
+    for r in header_rows:
+        if r["field"] in DATE_FIELDS:
+            val = r["value"]
+            valid = bool(val and re.match(r"^\d{8}$", val))
+            if valid:
+                try:
+                    datetime.strptime(val, "%Y%m%d")
+                except ValueError:
+                    valid = False
+            if not valid:
+                issues.append({"field": r["field"], "value": val or "(empty)"})
+    return issues
 
 
 # ─── Comparison Logic ─────────────────────────────────────────────────────────
@@ -208,7 +234,7 @@ def _banner(ws, row, ecc_name, s4_name):
     row += 1
 
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n)
-    _set(ws.cell(row, 1), "SAP ECC -> S4  OUTPUT COMPARISON REPORT",
+    _set(ws.cell(row, 1), "ZB6 Comparison Report",
          bg=SEC_BG, size=11, bold=True, color="D8C8FF", h="center")
     ws.row_dimensions[row].height = 20
     row += 1
@@ -428,8 +454,8 @@ def main():
                 parent=root,
             )
             ecc_path = filedialog.askopenfilename(
-                title="Select ECC (Old System) Excel File",
-                filetypes=[("Excel Files", "*.xlsx *.xls"), ("All Files", "*.*")],
+                title="Select ECC (Old System) XML/HTML File",
+                filetypes=[("XML/HTML Files", "*.xml *.html"), ("All Files", "*.*")],
                 parent=root,
             )
             if not ecc_path:
@@ -443,8 +469,8 @@ def main():
                 parent=root,
             )
             s4_path = filedialog.askopenfilename(
-                title="Select S4 (New System) Excel File",
-                filetypes=[("Excel Files", "*.xlsx *.xls"), ("All Files", "*.*")],
+                title="Select S4 (New System) XML/HTML File",
+                filetypes=[("XML/HTML Files", "*.xml *.html"), ("All Files", "*.*")],
                 parent=root,
             )
             if not s4_path:

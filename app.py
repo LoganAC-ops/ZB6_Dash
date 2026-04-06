@@ -10,7 +10,7 @@ import pandas as pd
 import tempfile
 import os
 
-from compare_sap import parse_file, compare_headers, compare_line_items, build_report
+from compare_sap import parse_file, compare_headers, compare_line_items, build_report, check_dates
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 
@@ -102,14 +102,14 @@ col1, col2 = st.columns(2)
 with col1:
     ecc_file = st.file_uploader(
         "ECC File (old system)",
-        type=["xlsx", "xls"],
-        help="Export from SAP ECC",
+        type=["xml", "html"],
+        help="XML/HTML export from SAP ECC",
     )
 with col2:
     s4_file = st.file_uploader(
         "S4 File (new system)",
-        type=["xlsx", "xls"],
-        help="Export from SAP S4",
+        type=["xml", "html"],
+        help="XML/HTML export from SAP S4",
     )
 
 st.markdown("")
@@ -143,6 +143,20 @@ if run and ecc_file and s4_file:
             os.unlink(s4_path)
 
     st.success("Comparison complete.")
+
+    # ── Date format warnings ──────────────────────────────────────────────────
+    ecc_date_issues = check_dates(ecc_hdr)
+    s4_date_issues  = check_dates(s4_hdr)
+    if ecc_date_issues or s4_date_issues:
+        with st.expander("⚠️ Date Format Warnings — expected YYYYMMDD (e.g. 20260206)", expanded=True):
+            if ecc_date_issues:
+                st.markdown(f"**ECC ({ecc_file.name})**")
+                for issue in ecc_date_issues:
+                    st.warning(f"`{issue['field']}` → `{issue['value']}`  — not a valid YYYYMMDD date")
+            if s4_date_issues:
+                st.markdown(f"**S4 ({s4_file.name})**")
+                for issue in s4_date_issues:
+                    st.warning(f"`{issue['field']}` → `{issue['value']}`  — not a valid YYYYMMDD date")
 
     # ── Legend ────────────────────────────────────────────────────────────────
     render_legend()
