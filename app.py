@@ -87,7 +87,7 @@ st.markdown(
             MONDELEZ INTERNATIONAL &nbsp;|&nbsp; ACCENTURE
         </h2>
         <p style="color:#D8C8FF;margin:4px 0 0;font-size:15px">
-            SAP ECC &rarr; S4 &nbsp; Output Comparison Tool
+            ZB6 Comparison Report
         </p>
     </div>
     """,
