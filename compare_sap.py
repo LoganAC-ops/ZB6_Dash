@@ -533,6 +533,344 @@ def build_raw_export(ecc_path, s4_path, output_path=None):
     return output_path
 
 
+# ─── Costa Rica Parsing ──────────────────────────────────────────────────────
+
+def parse_file_cr(filepath):
+    """
+    Parse Costa Rica NotaCreditoElectronica XML.
+    Returns (header_rows, line_rows, doc_number).
+    header_rows: [{field, value}] flat pairs
+    line_rows:   [{line_num, codigo_cabys, codigo_interno, codigo_externo,
+                   detalle, cantidad, precio_unitario, monto_total, subtotal,
+                   base_imponible, monto_total_linea, impuesto_tarifa, impuesto_monto}]
+    """
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    content = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', '', content)
+    content = re.sub(r'<([\w.-]+):([\w.-]+)', r'<\2', content)
+    content = re.sub(r'</([\w.-]+):([\w.-]+)', r'</\2', content)
+
+    root = ET.fromstring(content)
+
+    def _t(node, tag):
+        el = node.find(f".//{tag}")
+        return el.text.strip() if el is not None and el.text else None
+
+    def _n(node, tag):
+        if node is None:
+            return None
+        el = node.find(f".//{tag}")
+        return el.text.strip() if el is not None and el.text else None
+
+    doc_number = _t(root, "NumeroConsecutivo")
+
+    emisor   = root.find(".//Emisor")
+    receptor = root.find(".//Receptor")
+    resumen  = root.find(".//ResumenFactura")
+    moneda   = root.find(".//CodigoTipoMoneda")
+
+    header_rows = []
+    for field, value in [
+        ("Clave",                     _t(root,    "Clave")),
+        ("NumeroConsecutivo",          _t(root,    "NumeroConsecutivo")),
+        ("FechaEmision",              _t(root,    "FechaEmision")),
+        ("CondicionVenta",            _t(root,    "CondicionVenta")),
+        ("PlazoCredito",              _t(root,    "PlazoCredito")),
+        ("Emisor - Nombre",           _n(emisor,   "Nombre")),
+        ("Emisor - Identificacion",   _n(emisor,   "Numero")),
+        ("Receptor - Nombre",         _n(receptor, "Nombre")),
+        ("Receptor - Identificacion", _n(receptor, "Numero")),
+        ("CodigoMoneda",              _n(moneda,   "CodigoMoneda")),
+        ("TipoCambio",                _n(moneda,   "TipoCambio")),
+        ("TotalVenta",                _n(resumen,  "TotalVenta")),
+        ("TotalDescuentos",           _n(resumen,  "TotalDescuentos")),
+        ("TotalVentaNeta",            _n(resumen,  "TotalVentaNeta")),
+        ("TotalImpuesto",             _n(resumen,  "TotalImpuesto")),
+        ("TotalComprobante",          _n(resumen,  "TotalComprobante")),
+    ]:
+        header_rows.append({"field": field, "value": value or "", "row_num": None})
+
+    line_rows = []
+    for ld in root.findall(".//LineaDetalle"):
+        codigo_interno = codigo_externo = None
+        for cc in ld.findall("CodigoComercial"):
+            tipo   = _t(cc, "Tipo")
+            codigo = _t(cc, "Codigo")
+            if tipo == "01":
+                codigo_interno = codigo
+            elif tipo == "03":
+                codigo_externo = codigo
+        impuesto = ld.find("Impuesto")
+        line_rows.append({
+            "line_num":          _t(ld, "NumeroLinea"),
+            "codigo_cabys":      _t(ld, "CodigoCABYS"),
+            "codigo_interno":    codigo_interno,
+            "codigo_externo":    codigo_externo,
+            "detalle":           _t(ld, "Detalle"),
+            "cantidad":          _t(ld, "Cantidad"),
+            "precio_unitario":   _t(ld, "PrecioUnitario"),
+            "monto_total":       _t(ld, "MontoTotal"),
+            "subtotal":          _t(ld, "SubTotal"),
+            "base_imponible":    _t(ld, "BaseImponible"),
+            "monto_total_linea": _t(ld, "MontoTotalLinea"),
+            "impuesto_tarifa":   _t(impuesto, "Tarifa") if impuesto is not None else None,
+            "impuesto_monto":    _t(impuesto, "Monto")  if impuesto is not None else None,
+        })
+
+    return header_rows, line_rows, doc_number
+
+
+def compare_cr_lines(prod_lines, test_lines):
+    """
+    Compare Costa Rica line items by NumeroLinea.
+    Returns list of {key, prod, test, status}.
+    """
+    def _key(r):
+        return str(r.get("line_num") or "")
+
+    prod_map, test_map = {}, {}
+    for r in prod_lines:
+        prod_map.setdefault(_key(r), []).append(r)
+    for r in test_lines:
+        test_map.setdefault(_key(r), []).append(r)
+
+    all_keys, seen = [], set()
+    for r in prod_lines:
+        k = _key(r)
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+    for r in test_lines:
+        k = _key(r)
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+
+    results = []
+    for k in all_keys:
+        prod_list = prod_map.get(k, [])
+        test_list = test_map.get(k, [])
+        for i in range(max(len(prod_list), len(test_list))):
+            prod_r = prod_list[i] if i < len(prod_list) else None
+            test_r = test_list[i] if i < len(test_list) else None
+            status = "match" if (prod_r and test_r) else ("missing_in_s4" if prod_r else "extra_in_s4")
+            results.append({"key": k, "prod": prod_r, "test": test_r, "status": status})
+    return results
+
+
+def build_report_cr(prod_path, test_path, output_path=None):
+    """Build Excel comparison report for Costa Rica."""
+    prod_name = os.path.basename(prod_path)
+    test_name = os.path.basename(test_path)
+
+    prod_hdr, prod_lines, prod_docnum = parse_file_cr(prod_path)
+    test_hdr, test_lines, test_docnum = parse_file_cr(test_path)
+
+    prod_label = prod_docnum or prod_name
+    test_label = test_docnum or test_name
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Comparison"
+
+    for i, w in enumerate([28, 32, 32, 10, 10, 16, 16, 16, 16], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    row = 1
+    row = _banner(ws, row, prod_name, test_name)
+    row = _legend(ws, row)
+
+    # ── Section 1: Headers ────────────────────────────────────────────────────
+    hdr_results = compare_headers(prod_hdr, test_hdr)
+    n_match   = sum(1 for r in hdr_results if r["status"] == "match")
+    n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
+    n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
+
+    row = _section_hdr(ws, row,
+        f"SECTION 1 — HEADER DETAILS  "
+        f"| Production: {len(prod_hdr)} fields   Testing: {len(test_hdr)} fields   "
+        f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
+        n=4)
+
+    row = _col_hdrs(ws, row, [
+        "FIELD",
+        f"Production Value\n({prod_label})",
+        f"Testing Value\n({test_label})",
+        "STATUS",
+    ], height=24)
+
+    for item in hdr_results:
+        bg, status_text, fg = _status_style(item["status"])
+        vals   = [item["field"],
+                  item["ecc_value"] if item["ecc_value"] is not None else "—",
+                  item["s4_value"]  if item["s4_value"]  is not None else "—",
+                  status_text]
+        aligns = ["left", "left", "left", "center"]
+        bolds  = [False, False, False, True]
+        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
+            c = ws.cell(row, i, v)
+            c.fill      = _fill(bg)
+            c.font      = _font(10, bold=b, color=(fg if i == 4 else "212121"))
+            c.alignment = _align(h=ha)
+            c.border    = _border()
+        ws.row_dimensions[row].height = 17
+        row += 1
+
+    row += 1
+
+    # ── Section 2: Line Items ─────────────────────────────────────────────────
+    line_results = compare_cr_lines(prod_lines, test_lines)
+    n_match   = sum(1 for r in line_results if r["status"] == "match")
+    n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
+    n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
+
+    row = _section_hdr(ws, row,
+        f"SECTION 2 — LINE ITEMS  "
+        f"| Production: {len(prod_lines)} rows   Testing: {len(test_lines)} rows   "
+        f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
+        n=9)
+
+    row = _col_hdrs(ws, row, [
+        "Line #",
+        f"Prod: Cod. Interno\n({prod_label})",
+        f"Test: Cod. Interno\n({test_label})",
+        "Detalle",
+        f"Prod: PrecioUnitario\n({prod_label})",
+        f"Test: PrecioUnitario\n({test_label})",
+        f"Prod: MontoTotalLinea\n({prod_label})",
+        f"Test: MontoTotalLinea\n({test_label})",
+        "STATUS",
+    ], height=30)
+
+    for item in line_results:
+        bg, status_text, fg = _status_style(item["status"])
+        p = item["prod"] or {}
+        t = item["test"] or {}
+        vals = [
+            str(p.get("line_num")          or t.get("line_num")          or "—"),
+            p.get("codigo_interno")         or "—",
+            t.get("codigo_interno")         or "—",
+            str(p.get("detalle")           or t.get("detalle")           or "—"),
+            p.get("precio_unitario")        or "—",
+            t.get("precio_unitario")        or "—",
+            p.get("monto_total_linea")      or "—",
+            t.get("monto_total_linea")      or "—",
+            status_text,
+        ]
+        aligns = ["center","left","left","left","center","center","center","center","center"]
+        bolds  = [False]*8 + [True]
+        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
+            c = ws.cell(row, i, v)
+            c.fill      = _fill(bg)
+            c.font      = _font(10, bold=b, color=(fg if i == 9 else "212121"))
+            c.alignment = _align(h=ha)
+            c.border    = _border()
+        ws.row_dimensions[row].height = 17
+        row += 1
+
+    if output_path is None:
+        ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.dirname(os.path.abspath(prod_path))
+        output_path = os.path.join(out_dir, f"CR_Comparison_{ts}.xlsx")
+
+    wb.save(output_path)
+    return output_path
+
+
+def build_raw_export_cr(prod_path, test_path, output_path=None):
+    """Build raw data Excel for Costa Rica (two sheets, one per file)."""
+    prod_hdr, prod_lines, prod_docnum = parse_file_cr(prod_path)
+    test_hdr, test_lines, test_docnum = parse_file_cr(test_path)
+
+    prod_label = prod_docnum or os.path.basename(prod_path)
+    test_label = test_docnum or os.path.basename(test_path)
+
+    wb = Workbook()
+    n_line_cols = 10
+
+    for label, hdr_rows, line_rows in [
+        (prod_label, prod_hdr, prod_lines),
+        (test_label, test_hdr, test_lines),
+    ]:
+        ws = wb.create_sheet(title=label[:31])
+        row = 1
+
+        # Header fields
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        _set(ws.cell(row, 1), "HEADER FIELDS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
+        ws.cell(row, 2).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for col, title in [(1, "Field"), (2, "Value")]:
+            c = ws.cell(row, col, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color="FFFFFF")
+            c.alignment = _align(h="center")
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        for r in hdr_rows:
+            _set(ws.cell(row, 1), r["field"], h="left")
+            _set(ws.cell(row, 2), r["value"], h="left")
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        row += 1
+
+        # Line items
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_line_cols)
+        _set(ws.cell(row, 1), "LINE ITEMS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
+        for col in range(2, n_line_cols + 1):
+            ws.cell(row, col).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for i, title in enumerate(["Line #", "CodigoCABYS", "Cod. Interno", "Cod. Externo",
+                                    "Detalle", "Cantidad", "PrecioUnitario", "MontoTotal",
+                                    "MontoTotalLinea", "Impuesto Monto"], 1):
+            c = ws.cell(row, i, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color="FFFFFF")
+            c.alignment = _align(h="center", wrap=True)
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        for r in line_rows:
+            for i, v in enumerate([
+                r.get("line_num")          or "",
+                r.get("codigo_cabys")      or "",
+                r.get("codigo_interno")    or "",
+                r.get("codigo_externo")    or "",
+                r.get("detalle")           or "",
+                r.get("cantidad")          or "",
+                r.get("precio_unitario")   or "",
+                r.get("monto_total")       or "",
+                r.get("monto_total_linea") or "",
+                r.get("impuesto_monto")    or "",
+            ], 1):
+                _set(ws.cell(row, i), v, h="center" if i in (1, 6, 7, 8, 9, 10) else "left")
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        for i, w in enumerate([8, 18, 22, 16, 20, 10, 16, 14, 16, 14], 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
+
+    if output_path is None:
+        ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.dirname(os.path.abspath(prod_path))
+        output_path = os.path.join(out_dir, f"CR_RawData_{ts}.xlsx")
+
+    wb.save(output_path)
+    return output_path
+
+
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
 def main():
