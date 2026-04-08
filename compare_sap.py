@@ -435,6 +435,104 @@ def build_report(ecc_path, s4_path, output_path=None):
     return output_path
 
 
+# ─── Raw Data Export ─────────────────────────────────────────────────────────
+
+def build_raw_export(ecc_path, s4_path, output_path=None):
+    """
+    Build a two-sheet Excel with the raw parsed data from each file.
+    Sheet names are the document numbers (or filenames as fallback).
+    """
+    ecc_hdr, ecc_lines, ecc_docnum = parse_file(ecc_path)
+    s4_hdr,  s4_lines,  s4_docnum  = parse_file(s4_path)
+
+    ecc_label = ecc_docnum or os.path.basename(ecc_path)
+    s4_label  = s4_docnum  or os.path.basename(s4_path)
+
+    wb = Workbook()
+
+    for label, hdr_rows, line_rows in [
+        (ecc_label, ecc_hdr, ecc_lines),
+        (s4_label,  s4_hdr,  s4_lines),
+    ]:
+        ws = wb.create_sheet(title=label[:31])  # Excel sheet name max 31 chars
+
+        # ── Header fields section ─────────────────────────────────────────────
+        row = 1
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        _set(ws.cell(row, 1), "HEADER FIELDS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
+        ws.cell(row, 2).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for col, title in [(1, "TextTypeCode"), (2, "Value")]:
+            c = ws.cell(row, col, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color="FFFFFF")
+            c.alignment = _align(h="center")
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        for r in hdr_rows:
+            _set(ws.cell(row, 1), r["field"],  h="left")
+            _set(ws.cell(row, 2), r["value"],  h="left")
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        row += 1
+
+        # ── Line items section ────────────────────────────────────────────────
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        _set(ws.cell(row, 1), "LINE ITEMS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
+        for col in range(2, 9):
+            ws.cell(row, col).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        line_cols = ["Line #", "Charge Type", "Material Number", "Description",
+                     "Amount", "Material Desc", "Product Desc", "Net Weight"]
+        for i, title in enumerate(line_cols, 1):
+            c = ws.cell(row, i, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color="FFFFFF")
+            c.alignment = _align(h="center", wrap=True)
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        for r in line_rows:
+            vals = [
+                r.get("line_num")      or "",
+                r.get("charge_type")   or "",
+                r.get("material_num")  or "",
+                r.get("description")   or "",
+                r.get("amount")        or "",
+                r.get("material_desc") or "",
+                r.get("product_desc")  or "",
+                r.get("net_weight")    or "",
+            ]
+            for i, v in enumerate(vals, 1):
+                _set(ws.cell(row, i), v, h="left" if i not in (1, 5) else "center")
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        # Column widths
+        for i, w in enumerate([10, 14, 18, 30, 14, 24, 24, 14], 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    # Remove default empty sheet
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
+
+    if output_path is None:
+        ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.dirname(os.path.abspath(ecc_path))
+        output_path = os.path.join(out_dir, f"SAP_RawData_{ts}.xlsx")
+
+    wb.save(output_path)
+    return output_path
+
+
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
 def main():

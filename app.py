@@ -10,7 +10,7 @@ import pandas as pd
 import tempfile
 import os
 
-from compare_sap import parse_file, compare_headers, compare_line_items, build_report, check_dates
+from compare_sap import parse_file, compare_headers, compare_line_items, build_report, build_raw_export, check_dates
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 
@@ -140,6 +140,9 @@ if run and ecc_file and s4_file:
             out_dir = tempfile.gettempdir()
             out_path = os.path.join(out_dir, f"SAP_Comparison_{ts}.xlsx")
             build_report(ecc_path, s4_path, output_path=out_path)
+
+            raw_path = os.path.join(out_dir, f"SAP_RawData_{ts}.xlsx")
+            build_raw_export(ecc_path, s4_path, output_path=raw_path)
 
         finally:
             os.unlink(ecc_path)
@@ -273,10 +276,20 @@ if run and ecc_file and s4_file:
     st.markdown("")
 
     # ── Download ──────────────────────────────────────────────────────────────
-    with open(out_path, "rb") as f:
-        st.download_button(
-            label="Download Excel Report",
-            data=f,
-            file_name=os.path.basename(out_path),
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        with open(out_path, "rb") as f:
+            st.download_button(
+                label="Download Comparison Report",
+                data=f,
+                file_name=os.path.basename(out_path),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+    with dl2:
+        with open(raw_path, "rb") as f:
+            st.download_button(
+                label="Download Raw Data",
+                data=f,
+                file_name=os.path.basename(raw_path),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
