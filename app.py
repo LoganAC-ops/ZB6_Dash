@@ -125,8 +125,11 @@ if run and ecc_file and s4_file:
         s4_path  = save_upload(s4_file)
 
         try:
-            ecc_hdr,  ecc_lines = parse_file(ecc_path)
-            s4_hdr,   s4_lines  = parse_file(s4_path)
+            ecc_hdr,  ecc_lines, ecc_docnum = parse_file(ecc_path)
+            s4_hdr,   s4_lines,  s4_docnum  = parse_file(s4_path)
+
+            ecc_label = ecc_docnum or ecc_file.name
+            s4_label  = s4_docnum  or s4_file.name
 
             hdr_results  = compare_headers(ecc_hdr, s4_hdr)
             line_results = compare_line_items(ecc_lines, s4_lines)
@@ -180,22 +183,22 @@ if run and ecc_file and s4_file:
     def make_hdr_row(r):
         return {
             "Field (TextTypeCode)": r["field"],
-            f"ECC Value ({ecc_file.name})": r["ecc_value"] if r["ecc_value"] is not None else "—",
-            f"S4 Value ({s4_file.name})":   r["s4_value"]  if r["s4_value"]  is not None else "—",
+            f"ECC Value ({ecc_label})": r["ecc_value"] if r["ecc_value"] is not None else "—",
+            f"S4 Value ({s4_label})":   r["s4_value"]  if r["s4_value"]  is not None else "—",
             "Status": STATUS_LABELS[r["status"]],
         }
 
     def make_line_row(r):
         e, s = r["ecc"] or {}, r["s4"] or {}
         return {
-            "Line #":                              str(e.get("line_num") or s.get("line_num") or "—"),
-            "Charge Type":                         str(e.get("charge_type") or s.get("charge_type") or "—"),
-            f"ECC: Material ({ecc_file.name})":    e.get("material_num")  or "—",
-            f"S4: Material ({s4_file.name})":      s.get("material_num")  or "—",
-            f"ECC: Amount ({ecc_file.name})":      e.get("amount")        or "—",
-            f"S4: Amount ({s4_file.name})":        s.get("amount")        or "—",
-            f"ECC: Description ({ecc_file.name})": e.get("description")   or "—",
-            f"S4: Description ({s4_file.name})":   s.get("description")   or "—",
+            "Line #":                             str(e.get("line_num") or s.get("line_num") or "—"),
+            "Charge Type":                        str(e.get("charge_type") or s.get("charge_type") or "—"),
+            f"ECC: Material ({ecc_label})":    e.get("material_num")  or "—",
+            f"S4: Material ({s4_label})":      s.get("material_num")  or "—",
+            f"ECC: Amount ({ecc_label})":      e.get("amount")        or "—",
+            f"S4: Amount ({s4_label})":        s.get("amount")        or "—",
+            f"ECC: Description ({ecc_label})": e.get("description")   or "—",
+            f"S4: Description ({s4_label})":   s.get("description")   or "—",
             "Status": STATUS_LABELS[r["status"]],
         }
 

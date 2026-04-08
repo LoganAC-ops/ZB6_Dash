@@ -78,6 +78,7 @@ def parse_file(filepath):
         el = node.find(f".//{tag}")
         return el.text.strip() if el is not None and el.text else None
 
+    doc_number  = _text(root, "DocumentNumber")
     header_rows = []
     line_rows   = []
 
@@ -113,7 +114,7 @@ def parse_file(filepath):
                     "row_num":       None,
                 })
 
-    return header_rows, line_rows
+    return header_rows, line_rows, doc_number
 
 
 # ─── Date Validation ──────────────────────────────────────────────────────────
@@ -302,10 +303,13 @@ def build_report(ecc_path, s4_path, output_path=None):
     s4_name  = os.path.basename(s4_path)
 
     print(f"  Reading ECC : {ecc_name}")
-    ecc_hdr, ecc_lines = parse_file(ecc_path)
+    ecc_hdr, ecc_lines, ecc_docnum = parse_file(ecc_path)
 
     print(f"  Reading S4  : {s4_name}")
-    s4_hdr,  s4_lines  = parse_file(s4_path)
+    s4_hdr,  s4_lines,  s4_docnum  = parse_file(s4_path)
+
+    ecc_label = ecc_docnum or ecc_name
+    s4_label  = s4_docnum  or s4_name
 
     print(f"  ECC header rows : {len(ecc_hdr)}   line rows : {len(ecc_lines)}")
     print(f"  S4  header rows : {len(s4_hdr)}   line rows : {len(s4_lines)}")
@@ -336,8 +340,8 @@ def build_report(ecc_path, s4_path, output_path=None):
 
     row = _col_hdrs(ws, row, [
         "FIELD  (TextTypeCode)",
-        f"ECC Value\n({ecc_name})",
-        f"S4 Value\n({s4_name})",
+        f"ECC Value\n({ecc_label})",
+        f"S4 Value\n({s4_label})",
         "STATUS",
     ], height=24)
 
@@ -380,12 +384,12 @@ def build_report(ecc_path, s4_path, output_path=None):
     row = _col_hdrs(ws, row, [
         "Line #",
         "Charge Type",
-        f"ECC: MaterialNumber\n({ecc_name})",
-        f"S4: MaterialNumber\n({s4_name})",
-        f"ECC: Amount\n({ecc_name})",
-        f"S4: Amount\n({s4_name})",
-        f"ECC: Description\n({ecc_name})",
-        f"S4: Description\n({s4_name})",
+        f"ECC: MaterialNumber\n({ecc_label})",
+        f"S4: MaterialNumber\n({s4_label})",
+        f"ECC: Amount\n({ecc_label})",
+        f"S4: Amount\n({s4_label})",
+        f"ECC: Description\n({ecc_label})",
+        f"S4: Description\n({s4_label})",
         "STATUS",
     ], height=30)
 
