@@ -871,14 +871,435 @@ def build_raw_export_cr(prod_path, test_path, output_path=None):
     return output_path
 
 
+# ─── Panama Parsing ──────────────────────────────────────────────────────────
+
+def parse_file_pa(filepath):
+    """
+    Parse Panama MT_InvoiceRequest XML.
+    Returns (header_rows, line_rows, doc_number).
+    header_rows: [{field, value}] flat key-value pairs
+    line_rows:   [{line_num, material_num, material_desc, ean, unit, quantity,
+                   line_amount, tax_amount, tax_rate, gross_price, net_price,
+                   discount_amount, taxable_amount, net_weight}]
+    """
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    content = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', '', content)
+    content = re.sub(r'<([\w.-]+):([\w.-]+)', r'<\2', content)
+    content = re.sub(r'</([\w.-]+):([\w.-]+)', r'</\2', content)
+
+    root = ET.fromstring(content)
+
+    def _t(node, tag):
+        el = node.find(f".//{tag}")
+        return el.text.strip() if el is not None and el.text else None
+
+    def _n(node, tag):
+        if node is None:
+            return None
+        el = node.find(f".//{tag}")
+        return el.text.strip() if el is not None and el.text else None
+
+    doc_number = _t(root, "DocumentNumber")
+
+    header_rows = []
+
+    # Document-level fields
+    for field, tag in [
+        ("ExternalNumber",    "ExternalNumber"),
+        ("DocumentNumber",    "DocumentNumber"),
+        ("CompanyCode",       "CompanyCode"),
+        ("FiscalYear",        "FiscalYear"),
+        ("DocumentType",      "DocumentType"),
+        ("Serie",             "Serie"),
+        ("Country",           "Country"),
+        ("CreationDate",      "CreationDate"),
+        ("RefDocumentReason", "RefDocumentReason"),
+    ]:
+        header_rows.append({"field": field, "value": _t(root, tag) or "", "row_num": None})
+
+    # HeaderFreeText entries
+    for hft in root.findall(".//HeaderFreeText"):
+        text_type = _t(hft, "TextTypeCode")
+        if text_type:
+            header_rows.append({
+                "field":   text_type,
+                "value":   _t(hft, "Text") or "",
+                "row_num": None,
+            })
+
+    # Party info (Emisor / Receptor)
+    for party in root.findall(".//HeaderInformationParty"):
+        role = _t(party, "PartyRoleCode") or "Unknown"
+        header_rows.append({"field": f"{role} - PartyID", "value": _t(party, "PartyID") or "", "row_num": None})
+        header_rows.append({"field": f"{role} - Name",    "value": _t(party, "Name")    or "", "row_num": None})
+        header_rows.append({"field": f"{role} - Address", "value": _t(party, "Address") or "", "row_num": None})
+        add_data = party.find("HeaderInformationPartyAddData")
+        if add_data is not None:
+            phone = _n(add_data, "PhoneNumber")
+            if phone:
+                header_rows.append({"field": f"{role} - Phone", "value": phone, "row_num": None})
+
+    # Payment terms
+    pt = root.find(".//HeaderInformationPaymentTerms")
+    if pt is not None:
+        for field, tag in [
+            ("PaymentTermsTypeCode",      "PaymentTermsTypeCode"),
+            ("PaymentDate",               "PaymentDate"),
+            ("PaymentTermsDescription2",  "PaymentTermsDescription2"),
+            ("PaymentTermsDescription3",  "PaymentTermsDescription3"),
+        ]:
+            header_rows.append({"field": field, "value": _n(pt, tag) or "", "row_num": None})
+
+    # Total amounts
+    ta = root.find(".//TotalAmounts")
+    if ta is not None:
+        for field, tag in [
+            ("InvoiceAmount",       "InvoiceAmount"),
+            ("SubTotal1",           "SubTotal1"),
+            ("SubTotal2",           "SubTotal2"),
+            ("SubTotal3",           "SubTotal3"),
+            ("SubTotal4",           "SubTotal4"),
+            ("TaxAmount",           "TaxAmount"),
+            ("TotalForDiscount",    "TotalForDiscount"),
+            ("TotalDiscountAmount", "TotalDiscountAmount"),
+        ]:
+            header_rows.append({"field": field, "value": _n(ta, tag) or "", "row_num": None})
+
+    # Line items
+    line_rows = []
+    for li in root.findall(".//LineItemInformation"):
+        pricing = li.find("LineItemInformationQuantities/LineItemInformationPricingAndAmounts")
+        discounts = li.find(".//LineItemPricingDiscounts")
+        packaging = li.find(".//LineItemInformationPackagingDetails")
+        line_rows.append({
+            "line_num":       _t(li, "LineItemNumber"),
+            "material_num":   _t(li, "MaterialNumber"),
+            "material_desc":  _t(li, "MaterialDescription"),
+            "ean":            _t(li, "ProductIDEAN"),
+            "unit":           _t(li, "MeasureUnitCode"),
+            "quantity":       _t(li, "InvoicedQuantity"),
+            "line_amount":    _n(pricing, "LineItemAmount"),
+            "tax_amount":     _n(pricing, "TaxAmount"),
+            "taxable_amount": _n(pricing, "TaxableAmount"),
+            "tax_rate":       _n(pricing, "TaxRate"),
+            "gross_price":    _n(pricing, "ProductGrossPrice"),
+            "net_price":      _n(pricing, "ProductNetPrice"),
+            "discount_amount": _n(discounts, "LineItemDiscountAmount") if discounts is not None else None,
+            "net_weight":     _n(packaging, "NetWeight") if packaging is not None else None,
+        })
+
+    return header_rows, line_rows, doc_number
+
+
+def compare_pa_lines(prod_lines, test_lines):
+    """
+    Compare Panama line items by LineItemNumber.
+    Returns list of {key, prod, test, status}.
+    """
+    def _key(r):
+        return str(r.get("line_num") or "")
+
+    prod_map, test_map = {}, {}
+    for r in prod_lines:
+        prod_map.setdefault(_key(r), []).append(r)
+    for r in test_lines:
+        test_map.setdefault(_key(r), []).append(r)
+
+    all_keys, seen = [], set()
+    for r in prod_lines:
+        k = _key(r)
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+    for r in test_lines:
+        k = _key(r)
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+
+    results = []
+    for k in all_keys:
+        prod_list = prod_map.get(k, [])
+        test_list = test_map.get(k, [])
+        for i in range(max(len(prod_list), len(test_list))):
+            prod_r = prod_list[i] if i < len(prod_list) else None
+            test_r = test_list[i] if i < len(test_list) else None
+            status = "match" if (prod_r and test_r) else ("missing_in_s4" if prod_r else "extra_in_s4")
+            results.append({"key": k, "prod": prod_r, "test": test_r, "status": status})
+    return results
+
+
+def build_report_pa(prod_path, test_path, output_path=None):
+    """Build Excel comparison report for Panama."""
+    prod_name = os.path.basename(prod_path)
+    test_name = os.path.basename(test_path)
+
+    prod_hdr, prod_lines, prod_docnum = parse_file_pa(prod_path)
+    test_hdr, test_lines, test_docnum = parse_file_pa(test_path)
+
+    prod_label = prod_docnum or prod_name
+    test_label = test_docnum or test_name
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Comparison"
+
+    for i, w in enumerate([28, 32, 32, 10, 10, 16, 16, 16, 16], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    row = 1
+    row = _banner(ws, row, prod_name, test_name)
+    row = _legend(ws, row)
+
+    # ── Section 1: Headers ────────────────────────────────────────────────────
+    hdr_results = compare_headers(prod_hdr, test_hdr)
+    n_match   = sum(1 for r in hdr_results if r["status"] == "match")
+    n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
+    n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
+
+    row = _section_hdr(ws, row,
+        f"SECTION 1 — HEADER DETAILS  "
+        f"| Production: {len(prod_hdr)} fields   Testing: {len(test_hdr)} fields   "
+        f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
+        n=4)
+
+    row = _col_hdrs(ws, row, [
+        "FIELD",
+        f"Production Value\n({prod_label})",
+        f"Testing Value\n({test_label})",
+        "STATUS",
+    ], height=24)
+
+    for item in hdr_results:
+        bg, status_text, fg = _status_style(item["status"])
+        vals   = [item["field"],
+                  item["ecc_value"] if item["ecc_value"] is not None else "—",
+                  item["s4_value"]  if item["s4_value"]  is not None else "—",
+                  status_text]
+        aligns = ["left", "left", "left", "center"]
+        bolds  = [False, False, False, True]
+        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
+            c = ws.cell(row, i, v)
+            c.fill      = _fill(bg)
+            c.font      = _font(10, bold=b, color=(fg if i == 4 else "212121"))
+            c.alignment = _align(h=ha)
+            c.border    = _border()
+        ws.row_dimensions[row].height = 17
+        row += 1
+
+    row += 1
+
+    # ── Section 2: Line Items ─────────────────────────────────────────────────
+    line_results = compare_pa_lines(prod_lines, test_lines)
+    n_match   = sum(1 for r in line_results if r["status"] == "match")
+    n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
+    n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
+
+    row = _section_hdr(ws, row,
+        f"SECTION 2 — LINE ITEMS  "
+        f"| Production: {len(prod_lines)} rows   Testing: {len(test_lines)} rows   "
+        f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
+        n=9)
+
+    row = _col_hdrs(ws, row, [
+        "Line #",
+        f"Prod: MaterialNumber\n({prod_label})",
+        f"Test: MaterialNumber\n({test_label})",
+        "Material Desc",
+        f"Prod: LineItemAmount\n({prod_label})",
+        f"Test: LineItemAmount\n({test_label})",
+        f"Prod: NetPrice\n({prod_label})",
+        f"Test: NetPrice\n({test_label})",
+        "STATUS",
+    ], height=30)
+
+    for item in line_results:
+        bg, status_text, fg = _status_style(item["status"])
+        p = item["prod"] or {}
+        t = item["test"] or {}
+        vals = [
+            str(p.get("line_num")      or t.get("line_num")      or "—"),
+            p.get("material_num")      or "—",
+            t.get("material_num")      or "—",
+            str(p.get("material_desc") or t.get("material_desc") or "—"),
+            p.get("line_amount")       or "—",
+            t.get("line_amount")       or "—",
+            p.get("net_price")         or "—",
+            t.get("net_price")         or "—",
+            status_text,
+        ]
+        aligns = ["center","left","left","left","center","center","center","center","center"]
+        bolds  = [False]*8 + [True]
+        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
+            c = ws.cell(row, i, v)
+            c.fill      = _fill(bg)
+            c.font      = _font(10, bold=b, color=(fg if i == 9 else "212121"))
+            c.alignment = _align(h=ha)
+            c.border    = _border()
+        ws.row_dimensions[row].height = 17
+        row += 1
+
+    if output_path is None:
+        ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.dirname(os.path.abspath(prod_path))
+        output_path = os.path.join(out_dir, f"PA_Comparison_{ts}.xlsx")
+
+    wb.save(output_path)
+    return output_path
+
+
+def build_raw_export_pa(prod_path, test_path, output_path=None):
+    """Build raw data Excel for Panama (two sheets, one per file)."""
+    prod_hdr, prod_lines, prod_docnum = parse_file_pa(prod_path)
+    test_hdr, test_lines, test_docnum = parse_file_pa(test_path)
+
+    prod_label = prod_docnum or os.path.basename(prod_path)
+    test_label = test_docnum or os.path.basename(test_path)
+
+    wb = Workbook()
+    n_line_cols = 10
+
+    for label, hdr_rows, line_rows in [
+        (prod_label, prod_hdr, prod_lines),
+        (test_label, test_hdr, test_lines),
+    ]:
+        ws = wb.create_sheet(title=label[:31])
+        row = 1
+
+        # Header fields
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        _set(ws.cell(row, 1), "HEADER FIELDS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
+        ws.cell(row, 2).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for col, title in [(1, "Field"), (2, "Value")]:
+            c = ws.cell(row, col, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color="FFFFFF")
+            c.alignment = _align(h="center")
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        for r in hdr_rows:
+            _set(ws.cell(row, 1), r["field"], h="left")
+            _set(ws.cell(row, 2), r["value"], h="left")
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        row += 1
+
+        # Line items
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_line_cols)
+        _set(ws.cell(row, 1), "LINE ITEMS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
+        for col in range(2, n_line_cols + 1):
+            ws.cell(row, col).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for i, title in enumerate(["Line #", "MaterialNumber", "MaterialDesc", "EAN",
+                                    "Unit", "Quantity", "LineItemAmount", "TaxAmount",
+                                    "GrossPrice", "NetPrice"], 1):
+            c = ws.cell(row, i, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color="FFFFFF")
+            c.alignment = _align(h="center", wrap=True)
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        for r in line_rows:
+            for i, v in enumerate([
+                r.get("line_num")      or "",
+                r.get("material_num")  or "",
+                r.get("material_desc") or "",
+                r.get("ean")           or "",
+                r.get("unit")          or "",
+                r.get("quantity")      or "",
+                r.get("line_amount")   or "",
+                r.get("tax_amount")    or "",
+                r.get("gross_price")   or "",
+                r.get("net_price")     or "",
+            ], 1):
+                _set(ws.cell(row, i), v, h="center" if i in (1, 6, 7, 8, 9, 10) else "left")
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        for i, w in enumerate([8, 22, 28, 18, 10, 12, 16, 14, 14, 14], 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
+
+    if output_path is None:
+        ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.dirname(os.path.abspath(prod_path))
+        output_path = os.path.join(out_dir, f"PA_RawData_{ts}.xlsx")
+
+    wb.save(output_path)
+    return output_path
+
+
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
-def main():
-    ecc_path = s4_path = None
+COUNTRY_BUILDERS = {
+    "AR": build_report,
+    "CR": build_report_cr,
+    "PA": build_report_pa,
+}
 
-    if len(sys.argv) == 3:
+COUNTRY_LABELS = {
+    "AR": "Argentina",
+    "CR": "Costa Rica",
+    "PA": "Panama",
+}
+
+
+def _pick_country_gui(parent):
+    """Show a simple radio-button dialog and return the chosen country code."""
+    import tkinter as tk
+
+    result = {"code": None}
+
+    dlg = tk.Toplevel(parent)
+    dlg.title("Select Country")
+    dlg.attributes("-topmost", True)
+    dlg.resizable(False, False)
+
+    tk.Label(dlg, text="Select the country for this comparison:",
+             font=("Calibri", 11, "bold"), pady=10).pack(padx=20)
+
+    choice = tk.StringVar(value="AR")
+    for code, label in COUNTRY_LABELS.items():
+        tk.Radiobutton(dlg, text=f"{label} ({code})", variable=choice,
+                       value=code, font=("Calibri", 10)).pack(anchor="w", padx=30)
+
+    def _ok():
+        result["code"] = choice.get()
+        dlg.destroy()
+
+    tk.Button(dlg, text="OK", command=_ok, width=10,
+              font=("Calibri", 10, "bold")).pack(pady=12)
+
+    dlg.grab_set()
+    parent.wait_window(dlg)
+    return result["code"]
+
+
+def main():
+    ecc_path = s4_path = country = None
+
+    if len(sys.argv) == 4:
+        country  = sys.argv[1].upper()
+        ecc_path = sys.argv[2]
+        s4_path  = sys.argv[3]
+    elif len(sys.argv) == 3:
         ecc_path = sys.argv[1]
         s4_path  = sys.argv[2]
+        country  = "AR"
     else:
         try:
             import tkinter as tk
@@ -888,46 +1309,57 @@ def main():
             root.withdraw()
             root.attributes("-topmost", True)
 
+            country = _pick_country_gui(root)
+            if not country:
+                root.destroy()
+                return
+
+            country_label = COUNTRY_LABELS.get(country, country)
+
             messagebox.showinfo(
                 "SAP Comparison Tool — Mondelez | Accenture",
-                "Step 1 of 2: Select the ECC (old system) Excel file.",
+                f"Step 1 of 2 [{country_label}]: Select the Production (old system) XML file.",
                 parent=root,
             )
             ecc_path = filedialog.askopenfilename(
-                title="Select ECC (Old System) XML/HTML File",
+                title=f"Select Production XML File [{country_label}]",
                 filetypes=[("XML/HTML Files", "*.xml *.html"), ("All Files", "*.*")],
                 parent=root,
             )
             if not ecc_path:
-                messagebox.showwarning("Cancelled", "No ECC file selected.", parent=root)
+                messagebox.showwarning("Cancelled", "No Production file selected.", parent=root)
                 root.destroy()
                 return
 
             messagebox.showinfo(
                 "SAP Comparison Tool — Mondelez | Accenture",
-                "Step 2 of 2: Select the S4 (new system) Excel file.",
+                f"Step 2 of 2 [{country_label}]: Select the Testing (new system) XML file.",
                 parent=root,
             )
             s4_path = filedialog.askopenfilename(
-                title="Select S4 (New System) XML/HTML File",
+                title=f"Select Testing XML File [{country_label}]",
                 filetypes=[("XML/HTML Files", "*.xml *.html"), ("All Files", "*.*")],
                 parent=root,
             )
             if not s4_path:
-                messagebox.showwarning("Cancelled", "No S4 file selected.", parent=root)
+                messagebox.showwarning("Cancelled", "No Testing file selected.", parent=root)
                 root.destroy()
                 return
 
             root.destroy()
         except Exception as e:
             print(f"GUI unavailable: {e}")
-            print("Usage: python compare_sap.py <ecc_file.xlsx> <s4_file.xlsx>")
+            print("Usage: python compare_sap.py [AR|CR|PA] <prod_file.xml> <test_file.xml>")
             return
 
-    print("\nSAP ECC -> S4 Comparison Tool  |  Mondelez | Accenture")
-    print("=" * 55)
+    if country not in COUNTRY_BUILDERS:
+        print(f"Unknown country code '{country}'. Valid options: {', '.join(COUNTRY_BUILDERS)}")
+        sys.exit(1)
+
+    print(f"\nSAP Comparison Tool  |  Mondelez | Accenture  |  {COUNTRY_LABELS[country]}")
+    print("=" * 60)
     try:
-        output = build_report(ecc_path, s4_path)
+        output = COUNTRY_BUILDERS[country](ecc_path, s4_path)
         try:
             import subprocess
             subprocess.Popen(["start", "", output], shell=True)
