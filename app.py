@@ -14,6 +14,7 @@ from datetime import datetime
 from compare_sap import (
     parse_file, compare_headers, compare_line_items, build_report, build_raw_export, check_dates,
     parse_file_cr, compare_cr_lines, build_report_cr, build_raw_export_cr,
+    parse_file_pa, compare_pa_lines, build_report_pa, build_raw_export_pa,
 )
 
 # ─── Page config ──────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ st.markdown("")
 
 # ─── Country Tabs ─────────────────────────────────────────────────────────────
 
-tab1, tab2 = st.tabs(["Argentina (ZB6)", "Costa Rica"])
+tab1, tab2, tab3 = st.tabs(["Argentina (ZB6)", "Costa Rica", "Panama"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -475,4 +476,177 @@ with tab2:
                     file_name=os.path.basename(raw_path),
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="dl_cr_raw",
+                )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — PANAMA
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab3:
+
+    st.markdown("### Panama (MT_InvoiceRequest)")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        prod_file_pa = st.file_uploader(
+            "Production File (baseline)",
+            type=["xml", "html"],
+            help="Production XML export from Panama",
+            key="prod_pa",
+        )
+    with col2:
+        test_file_pa = st.file_uploader(
+            "Testing File (new system)",
+            type=["xml", "html"],
+            help="Testing XML export from Panama",
+            key="test_pa",
+        )
+
+    st.markdown("")
+    run_pa = st.button(
+        "Run Comparison", type="primary",
+        disabled=not (prod_file_pa and test_file_pa),
+        key="run_pa",
+    )
+
+    if run_pa and prod_file_pa and test_file_pa:
+
+        with st.spinner("Reading and comparing files..."):
+            prod_path = save_upload(prod_file_pa)
+            test_path = save_upload(test_file_pa)
+
+            try:
+                prod_hdr, prod_lines, prod_docnum = parse_file_pa(prod_path)
+                test_hdr, test_lines, test_docnum = parse_file_pa(test_path)
+
+                prod_label = prod_docnum or prod_file_pa.name
+                test_label = test_docnum or test_file_pa.name
+
+                hdr_results  = compare_headers(prod_hdr, test_hdr)
+                line_results = compare_pa_lines(prod_lines, test_lines)
+
+                ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_dir  = tempfile.gettempdir()
+                out_path = os.path.join(out_dir, f"PA_Comparison_{ts}.xlsx")
+                build_report_pa(prod_path, test_path, output_path=out_path)
+
+                raw_path = os.path.join(out_dir, f"PA_RawData_{ts}.xlsx")
+                build_raw_export_pa(prod_path, test_path, output_path=raw_path)
+
+            finally:
+                os.unlink(prod_path)
+                os.unlink(test_path)
+
+        st.success("Comparison complete — Panama")
+
+        render_legend("MISSING IN TESTING", "EXTRA IN TESTING")
+        st.markdown("")
+
+        def style_pa(row):
+            return style_row(row, CR_STATUS_LABELS)
+
+        def make_hdr_row_pa(r):
+            return {
+                "Field":                              r["field"],
+                f"Production Value ({prod_label})":   r["ecc_value"] if r["ecc_value"] is not None else "—",
+                f"Testing Value ({test_label})":       r["s4_value"]  if r["s4_value"]  is not None else "—",
+                "Status": CR_STATUS_LABELS[r["status"]],
+            }
+
+        def make_line_row_pa(r):
+            p, t = r["prod"] or {}, r["test"] or {}
+            return {
+                "Line #":                                   str(p.get("line_num") or t.get("line_num") or "—"),
+                f"Prod: MaterialNumber ({prod_label})":     p.get("material_num")  or "—",
+                f"Test: MaterialNumber ({test_label})":     t.get("material_num")  or "—",
+                "Material Desc":                            str(p.get("material_desc") or t.get("material_desc") or "—"),
+                f"Prod: LineItemAmount ({prod_label})":     p.get("line_amount")   or "—",
+                f"Test: LineItemAmount ({test_label})":     t.get("line_amount")   or "—",
+                f"Prod: NetPrice ({prod_label})":           p.get("net_price")     or "—",
+                f"Test: NetPrice ({test_label})":           t.get("net_price")     or "—",
+                "Status": CR_STATUS_LABELS[r["status"]],
+            }
+
+        # Section 1: Headers
+        n_match   = sum(1 for r in hdr_results if r["status"] == "match")
+        n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
+        n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
+        section_banner(
+            f"PANAMA — SECTION 1: HEADER DETAILS &nbsp;|&nbsp; "
+            f"Production: {len(prod_hdr)} &nbsp; Testing: {len(test_hdr)} &nbsp; "
+            f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
+        )
+
+        hdr_gaps = [r for r in hdr_results if r["status"] != "match"]
+        if hdr_gaps:
+            st.dataframe(
+                pd.DataFrame([make_hdr_row_pa(r) for r in hdr_gaps]).style.apply(style_pa, axis=1),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.success("All header fields match.")
+
+        st.markdown("")
+
+        # Section 2: Line Items
+        n_match   = sum(1 for r in line_results if r["status"] == "match")
+        n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
+        n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
+        section_banner(
+            f"PANAMA — SECTION 2: LINE ITEMS &nbsp;|&nbsp; "
+            f"Production: {len(prod_lines)} rows &nbsp; Testing: {len(test_lines)} rows &nbsp; "
+            f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
+        )
+
+        line_gaps = [r for r in line_results if r["status"] != "match"]
+        if line_gaps:
+            st.dataframe(
+                pd.DataFrame([make_line_row_pa(r) for r in line_gaps]).style.apply(style_pa, axis=1),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.success("All line items match.")
+
+        st.markdown("")
+
+        with st.expander("Full Combined View — all rows (matched, missing, extra)"):
+            st.markdown("**Header Details**")
+            if hdr_results:
+                st.dataframe(
+                    pd.DataFrame([make_hdr_row_pa(r) for r in hdr_results]).style.apply(style_pa, axis=1),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("No header data found.")
+
+            st.markdown("**Line Items**")
+            if line_results:
+                st.dataframe(
+                    pd.DataFrame([make_line_row_pa(r) for r in line_results]).style.apply(style_pa, axis=1),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("No line item data found.")
+
+        st.markdown("")
+
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            with open(out_path, "rb") as f:
+                st.download_button(
+                    label="Download Comparison Report",
+                    data=f,
+                    file_name=os.path.basename(out_path),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_pa_cmp",
+                )
+        with dl2:
+            with open(raw_path, "rb") as f:
+                st.download_button(
+                    label="Download Raw Data",
+                    data=f,
+                    file_name=os.path.basename(raw_path),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_pa_raw",
                 )
