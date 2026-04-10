@@ -919,6 +919,11 @@ def parse_file_pa(filepath):
     ]:
         header_rows.append({"field": field, "value": _t(root, tag) or "", "row_num": None})
 
+    # Optional reference fields — only append if present in the XML
+    doc_date = _t(root, "DocumentDate")
+    if doc_date is not None:
+        header_rows.append({"field": "DocumentDate", "value": doc_date, "row_num": None})
+
     # HeaderFreeText entries
     for hft in root.findall(".//HeaderFreeText"):
         text_type = _t(hft, "TextTypeCode")
