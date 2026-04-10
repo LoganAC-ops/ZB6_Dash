@@ -952,7 +952,7 @@ def parse_file_pa(filepath):
         ]:
             header_rows.append({"field": field, "value": _n(pt, tag) or "", "row_num": None})
 
-    # Total amounts
+    # Total amounts — only append fields that are actually present in the XML
     ta = root.find(".//TotalAmounts")
     if ta is not None:
         for field, tag in [
@@ -965,7 +965,9 @@ def parse_file_pa(filepath):
             ("TotalForDiscount",    "TotalForDiscount"),
             ("TotalDiscountAmount", "TotalDiscountAmount"),
         ]:
-            header_rows.append({"field": field, "value": _n(ta, tag) or "", "row_num": None})
+            val = _n(ta, tag)
+            if val is not None:
+                header_rows.append({"field": field, "value": val, "row_num": None})
 
     # Line items
     line_rows = []
