@@ -539,10 +539,6 @@ def parse_file_cr(filepath):
     """
     Parse Costa Rica NotaCreditoElectronica XML.
     Returns (header_rows, line_rows, doc_number).
-    header_rows: [{field, value}] flat pairs
-    line_rows:   [{line_num, codigo_cabys, codigo_interno, codigo_externo,
-                   detalle, cantidad, precio_unitario, monto_total, subtotal,
-                   base_imponible, monto_total_linea, impuesto_tarifa, impuesto_monto}]
     """
     with open(filepath, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
@@ -569,28 +565,85 @@ def parse_file_cr(filepath):
     receptor = root.find(".//Receptor")
     resumen  = root.find(".//ResumenFactura")
     moneda   = root.find(".//CodigoTipoMoneda")
+    medio    = resumen.find("MedioPago") if resumen is not None else None
+    ref      = root.find(".//InformacionReferencia")
 
     header_rows = []
+
+    # Root-level document fields
     for field, value in [
-        ("Clave",                     _t(root,    "Clave")),
-        ("NumeroConsecutivo",          _t(root,    "NumeroConsecutivo")),
-        ("FechaEmision",              _t(root,    "FechaEmision")),
-        ("CondicionVenta",            _t(root,    "CondicionVenta")),
-        ("PlazoCredito",              _t(root,    "PlazoCredito")),
-        ("Emisor - Nombre",           _n(emisor,   "Nombre")),
-        ("Emisor - Identificacion",   _n(emisor,   "Numero")),
-        ("Receptor - Nombre",         _n(receptor, "Nombre")),
-        ("Receptor - Identificacion", _n(receptor, "Numero")),
-        ("CodigoMoneda",              _n(moneda,   "CodigoMoneda")),
-        ("TipoCambio",                _n(moneda,   "TipoCambio")),
-        ("TotalVenta",                _n(resumen,  "TotalVenta")),
-        ("TotalDescuentos",           _n(resumen,  "TotalDescuentos")),
-        ("TotalVentaNeta",            _n(resumen,  "TotalVentaNeta")),
-        ("TotalImpuesto",             _n(resumen,  "TotalImpuesto")),
-        ("TotalComprobante",          _n(resumen,  "TotalComprobante")),
+        ("Clave",                        _t(root, "Clave")),
+        ("ProveedorSistemas",             _t(root, "ProveedorSistemas")),
+        ("CodigoActividadEmisor",         _t(root, "CodigoActividadEmisor")),
+        ("NumeroConsecutivo",             _t(root, "NumeroConsecutivo")),
+        ("FechaEmision",                  _t(root, "FechaEmision")),
+        ("CondicionVenta",                _t(root, "CondicionVenta")),
+        ("PlazoCredito",                  _t(root, "PlazoCredito")),
     ]:
         header_rows.append({"field": field, "value": value or "", "row_num": None})
 
+    # Emisor
+    for field, value in [
+        ("Emisor - Nombre",               _n(emisor, "Nombre")),
+        ("Emisor - NombreComercial",      _n(emisor, "NombreComercial")),
+        ("Emisor - Identificacion",       _n(emisor, "Numero")),
+        ("Emisor - Provincia",            _n(emisor, "Provincia")),
+        ("Emisor - Canton",               _n(emisor, "Canton")),
+        ("Emisor - Distrito",             _n(emisor, "Distrito")),
+        ("Emisor - OtrasSenas",           _n(emisor, "OtrasSenas")),
+        ("Emisor - Telefono",             _n(emisor, "NumTelefono")),
+        ("Emisor - CorreoElectronico",    _n(emisor, "CorreoElectronico")),
+    ]:
+        header_rows.append({"field": field, "value": value or "", "row_num": None})
+
+    # Receptor
+    for field, value in [
+        ("Receptor - Nombre",             _n(receptor, "Nombre")),
+        ("Receptor - NombreComercial",    _n(receptor, "NombreComercial")),
+        ("Receptor - Identificacion",     _n(receptor, "Numero")),
+        ("Receptor - Provincia",          _n(receptor, "Provincia")),
+        ("Receptor - Canton",             _n(receptor, "Canton")),
+        ("Receptor - Distrito",           _n(receptor, "Distrito")),
+        ("Receptor - OtrasSenas",         _n(receptor, "OtrasSenas")),
+        ("Receptor - Telefono",           _n(receptor, "NumTelefono")),
+        ("Receptor - CorreoElectronico",  _n(receptor, "CorreoElectronico")),
+    ]:
+        header_rows.append({"field": field, "value": value or "", "row_num": None})
+
+    # ResumenFactura
+    for field, value in [
+        ("CodigoMoneda",                  _n(moneda,  "CodigoMoneda")),
+        ("TipoCambio",                    _n(moneda,  "TipoCambio")),
+        ("TotalServGravados",             _n(resumen, "TotalServGravados")),
+        ("TotalServExentos",              _n(resumen, "TotalServExentos")),
+        ("TotalMercanciasGravadas",       _n(resumen, "TotalMercanciasGravadas")),
+        ("TotalMercanciasExentas",        _n(resumen, "TotalMercanciasExentas")),
+        ("TotalGravado",                  _n(resumen, "TotalGravado")),
+        ("TotalExento",                   _n(resumen, "TotalExento")),
+        ("TotalVenta",                    _n(resumen, "TotalVenta")),
+        ("TotalDescuentos",               _n(resumen, "TotalDescuentos")),
+        ("TotalVentaNeta",                _n(resumen, "TotalVentaNeta")),
+        ("TotalImpuesto",                 _n(resumen, "TotalImpuesto")),
+        ("MedioPago - TipoMedioPago",     _n(medio,   "TipoMedioPago")),
+        ("MedioPago - TotalMedioPago",    _n(medio,   "TotalMedioPago")),
+        ("TotalComprobante",              _n(resumen, "TotalComprobante")),
+    ]:
+        header_rows.append({"field": field, "value": value or "", "row_num": None})
+
+    # InformacionReferencia — structure varies by file, only add if present
+    if ref is not None:
+        for tag, label in [
+            ("TipoDocIR", "Referencia - TipoDocIR"),
+            ("Codigo",    "Referencia - Codigo"),
+            ("Numero",    "Referencia - Numero"),
+            ("FechaEmisionIR", "Referencia - FechaEmisionIR"),
+            ("Razon",     "Referencia - Razon"),
+        ]:
+            val = _n(ref, tag)
+            if val is not None:
+                header_rows.append({"field": label, "value": val, "row_num": None})
+
+    # Line items
     line_rows = []
     for ld in root.findall(".//LineaDetalle"):
         codigo_interno = codigo_externo = None
@@ -603,19 +656,27 @@ def parse_file_cr(filepath):
                 codigo_externo = codigo
         impuesto = ld.find("Impuesto")
         line_rows.append({
-            "line_num":          _t(ld, "NumeroLinea"),
-            "codigo_cabys":      _t(ld, "CodigoCABYS"),
-            "codigo_interno":    codigo_interno,
-            "codigo_externo":    codigo_externo,
-            "detalle":           _t(ld, "Detalle"),
-            "cantidad":          _t(ld, "Cantidad"),
-            "precio_unitario":   _t(ld, "PrecioUnitario"),
-            "monto_total":       _t(ld, "MontoTotal"),
-            "subtotal":          _t(ld, "SubTotal"),
-            "base_imponible":    _t(ld, "BaseImponible"),
-            "monto_total_linea": _t(ld, "MontoTotalLinea"),
-            "impuesto_tarifa":   _t(impuesto, "Tarifa") if impuesto is not None else None,
-            "impuesto_monto":    _t(impuesto, "Monto")  if impuesto is not None else None,
+            "line_num":               _t(ld, "NumeroLinea"),
+            "partida_arancelaria":    _t(ld, "PartidaArancelaria"),
+            "codigo_cabys":           _t(ld, "CodigoCABYS"),
+            "codigo_interno":         codigo_interno,
+            "codigo_externo":         codigo_externo,
+            "detalle":                _t(ld, "Detalle"),
+            "cantidad":               _t(ld, "Cantidad"),
+            "unidad_medida":          _t(ld, "UnidadMedida"),
+            "unidad_medida_comercial":_t(ld, "UnidadMedidaComercial"),
+            "tipo_transaccion":       _t(ld, "TipoTransaccion"),
+            "precio_unitario":        _t(ld, "PrecioUnitario"),
+            "monto_total":            _t(ld, "MontoTotal"),
+            "subtotal":               _t(ld, "SubTotal"),
+            "base_imponible":         _t(ld, "BaseImponible"),
+            "monto_total_linea":      _t(ld, "MontoTotalLinea"),
+            "impuesto_codigo":        _n(impuesto, "Codigo")           if impuesto is not None else None,
+            "impuesto_codigo_tarifa": _n(impuesto, "CodigoTarifaIVA") if impuesto is not None else None,
+            "impuesto_tarifa":        _n(impuesto, "Tarifa")           if impuesto is not None else None,
+            "impuesto_monto":         _n(impuesto, "Monto")            if impuesto is not None else None,
+            "impuesto_asumido":       _t(ld, "ImpuestoAsumidoEmisorFabrica"),
+            "impuesto_neto":          _t(ld, "ImpuestoNeto"),
         })
 
     return header_rows, line_rows, doc_number
@@ -787,7 +848,6 @@ def build_raw_export_cr(prod_path, test_path, output_path=None):
     test_label = test_docnum or os.path.basename(test_path)
 
     wb = Workbook()
-    n_line_cols = 10
 
     for label, hdr_rows, line_rows in [
         (prod_label, prod_hdr, prod_lines),
@@ -821,16 +881,22 @@ def build_raw_export_cr(prod_path, test_path, output_path=None):
         row += 1
 
         # Line items
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_line_cols)
+        cr_line_cols = [
+            "Line #", "PartidaArancelaria", "CodigoCABYS", "Cod. Interno", "Cod. Externo",
+            "Detalle", "Cantidad", "UnidadMedida", "UnidadMedidaComercial", "TipoTransaccion",
+            "PrecioUnitario", "MontoTotal", "SubTotal", "BaseImponible", "MontoTotalLinea",
+            "Imp. Codigo", "Imp. CodTarifaIVA", "Imp. Tarifa", "Imp. Monto",
+            "ImpuestoAsumido", "ImpuestoNeto",
+        ]
+        n_cr_line_cols = len(cr_line_cols)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_cr_line_cols)
         _set(ws.cell(row, 1), "LINE ITEMS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
-        for col in range(2, n_line_cols + 1):
+        for col in range(2, n_cr_line_cols + 1):
             ws.cell(row, col).fill = _fill(SEC_BG)
         ws.row_dimensions[row].height = 20
         row += 1
 
-        for i, title in enumerate(["Line #", "CodigoCABYS", "Cod. Interno", "Cod. Externo",
-                                    "Detalle", "Cantidad", "PrecioUnitario", "MontoTotal",
-                                    "MontoTotalLinea", "Impuesto Monto"], 1):
+        for i, title in enumerate(cr_line_cols, 1):
             c = ws.cell(row, i, title)
             c.fill = _fill(HDR_BG)
             c.font = _font(9, bold=True, color="FFFFFF")
@@ -839,24 +905,37 @@ def build_raw_export_cr(prod_path, test_path, output_path=None):
         ws.row_dimensions[row].height = 18
         row += 1
 
+        center_cols = {1, 7, 11, 12, 13, 14, 15, 18, 19, 20, 21}
         for r in line_rows:
             for i, v in enumerate([
-                r.get("line_num")          or "",
-                r.get("codigo_cabys")      or "",
-                r.get("codigo_interno")    or "",
-                r.get("codigo_externo")    or "",
-                r.get("detalle")           or "",
-                r.get("cantidad")          or "",
-                r.get("precio_unitario")   or "",
-                r.get("monto_total")       or "",
-                r.get("monto_total_linea") or "",
-                r.get("impuesto_monto")    or "",
+                r.get("line_num")               or "",
+                r.get("partida_arancelaria")     or "",
+                r.get("codigo_cabys")            or "",
+                r.get("codigo_interno")          or "",
+                r.get("codigo_externo")          or "",
+                r.get("detalle")                 or "",
+                r.get("cantidad")                or "",
+                r.get("unidad_medida")           or "",
+                r.get("unidad_medida_comercial") or "",
+                r.get("tipo_transaccion")        or "",
+                r.get("precio_unitario")         or "",
+                r.get("monto_total")             or "",
+                r.get("subtotal")                or "",
+                r.get("base_imponible")          or "",
+                r.get("monto_total_linea")       or "",
+                r.get("impuesto_codigo")         or "",
+                r.get("impuesto_codigo_tarifa")  or "",
+                r.get("impuesto_tarifa")         or "",
+                r.get("impuesto_monto")          or "",
+                r.get("impuesto_asumido")        or "",
+                r.get("impuesto_neto")           or "",
             ], 1):
-                _set(ws.cell(row, i), v, h="center" if i in (1, 6, 7, 8, 9, 10) else "left")
+                _set(ws.cell(row, i), v, h="center" if i in center_cols else "left")
             ws.row_dimensions[row].height = 16
             row += 1
 
-        for i, w in enumerate([8, 18, 22, 16, 20, 10, 16, 14, 16, 14], 1):
+        for i, w in enumerate([6, 18, 18, 22, 16, 24, 10, 14, 18, 14,
+                                16, 14, 14, 14, 16, 12, 16, 12, 12, 16, 14], 1):
             ws.column_dimensions[get_column_letter(i)].width = w
 
     if "Sheet" in wb.sheetnames:
@@ -907,6 +986,9 @@ def parse_file_pa(filepath):
 
     # Document-level fields
     for field, tag in [
+        ("SAPSystem",         "SAPSystem"),
+        ("EnvironmentID",     "EnvironmentID"),
+        ("AreaID",            "AreaID"),
         ("ExternalNumber",    "ExternalNumber"),
         ("DocumentNumber",    "DocumentNumber"),
         ("CompanyCode",       "CompanyCode"),
@@ -915,6 +997,7 @@ def parse_file_pa(filepath):
         ("Serie",             "Serie"),
         ("Country",           "Country"),
         ("CreationDate",      "CreationDate"),
+        ("CreationTime",      "CreationTime"),
         ("RefDocumentReason", "RefDocumentReason"),
     ]:
         header_rows.append({"field": field, "value": _t(root, tag) or "", "row_num": None})
@@ -937,14 +1020,24 @@ def parse_file_pa(filepath):
     # Party info (Emisor / Receptor)
     for party in root.findall(".//HeaderInformationParty"):
         role = _t(party, "PartyRoleCode") or "Unknown"
-        header_rows.append({"field": f"{role} - PartyID", "value": _t(party, "PartyID") or "", "row_num": None})
-        header_rows.append({"field": f"{role} - Name",    "value": _t(party, "Name")    or "", "row_num": None})
-        header_rows.append({"field": f"{role} - Address", "value": _t(party, "Address") or "", "row_num": None})
+        header_rows.append({"field": f"{role} - PartyID",   "value": _t(party, "PartyID")   or "", "row_num": None})
+        header_rows.append({"field": f"{role} - PartyType", "value": _t(party, "PartyType") or "", "row_num": None})
+        header_rows.append({"field": f"{role} - Name",      "value": _t(party, "Name")      or "", "row_num": None})
+        header_rows.append({"field": f"{role} - Address",   "value": _t(party, "Address")   or "", "row_num": None})
         add_data = party.find("HeaderInformationPartyAddData")
         if add_data is not None:
+            email = _n(add_data, "EmailID")
+            if email:
+                header_rows.append({"field": f"{role} - EmailID", "value": email, "row_num": None})
             phone = _n(add_data, "PhoneNumber")
             if phone:
                 header_rows.append({"field": f"{role} - Phone", "value": phone, "row_num": None})
+            # OtherData entries (DataID / DataDetail pairs)
+            for od in add_data.findall("OtherData"):
+                data_id     = _n(od, "DataID")
+                data_detail = _n(od, "DataDetail")
+                if data_id and data_detail is not None:
+                    header_rows.append({"field": f"{role} - {data_id}", "value": data_detail, "row_num": None})
 
     # Payment terms
     pt = root.find(".//HeaderInformationPaymentTerms")
@@ -961,14 +1054,15 @@ def parse_file_pa(filepath):
     ta = root.find(".//TotalAmounts")
     if ta is not None:
         for field, tag in [
-            ("InvoiceAmount",       "InvoiceAmount"),
-            ("SubTotal1",           "SubTotal1"),
-            ("SubTotal2",           "SubTotal2"),
-            ("SubTotal3",           "SubTotal3"),
-            ("SubTotal4",           "SubTotal4"),
-            ("TaxAmount",           "TaxAmount"),
-            ("TotalForDiscount",    "TotalForDiscount"),
-            ("TotalDiscountAmount", "TotalDiscountAmount"),
+            ("InvoiceAmount",            "InvoiceAmount"),
+            ("SubTotal1",                "SubTotal1"),
+            ("SubTotal2",                "SubTotal2"),
+            ("SubTotal3",                "SubTotal3"),
+            ("SubTotal4",                "SubTotal4"),
+            ("TaxAmount",                "TaxAmount"),
+            ("TotalForDiscount",         "TotalForDiscount"),
+            ("TotalDiscountDescription", "TotalDiscountDescription"),
+            ("TotalDiscountAmount",      "TotalDiscountAmount"),
         ]:
             val = _n(ta, tag)
             if val is not None:
@@ -977,24 +1071,25 @@ def parse_file_pa(filepath):
     # Line items
     line_rows = []
     for li in root.findall(".//LineItemInformation"):
-        pricing = li.find("LineItemInformationQuantities/LineItemInformationPricingAndAmounts")
+        pricing   = li.find("LineItemInformationQuantities/LineItemInformationPricingAndAmounts")
         discounts = li.find(".//LineItemPricingDiscounts")
         packaging = li.find(".//LineItemInformationPackagingDetails")
         line_rows.append({
-            "line_num":       _t(li, "LineItemNumber"),
-            "material_num":   _t(li, "MaterialNumber"),
-            "material_desc":  _t(li, "MaterialDescription"),
-            "ean":            _t(li, "ProductIDEAN"),
-            "unit":           _t(li, "MeasureUnitCode"),
-            "quantity":       _t(li, "InvoicedQuantity"),
-            "line_amount":    _n(pricing, "LineItemAmount"),
-            "tax_amount":     _n(pricing, "TaxAmount"),
-            "taxable_amount": _n(pricing, "TaxableAmount"),
-            "tax_rate":       _n(pricing, "TaxRate"),
-            "gross_price":    _n(pricing, "ProductGrossPrice"),
-            "net_price":      _n(pricing, "ProductNetPrice"),
+            "line_num":        _t(li, "LineItemNumber"),
+            "material_num":    _t(li, "MaterialNumber"),
+            "material_desc":   _t(li, "MaterialDescription"),
+            "ean":             _t(li, "ProductIDEAN"),
+            "unit":            _t(li, "MeasureUnitCode"),
+            "quantity":        _t(li, "InvoicedQuantity"),
+            "line_amount":     _n(pricing, "LineItemAmount"),
+            "tax_amount":      _n(pricing, "TaxAmount"),
+            "taxable_amount":  _n(pricing, "TaxableAmount"),
+            "tax_rate":        _n(pricing, "TaxRate"),
+            "gross_price":     _n(pricing, "ProductGrossPrice"),
+            "net_price":       _n(pricing, "ProductNetPrice"),
             "discount_amount": _n(discounts, "LineItemDiscountAmount") if discounts is not None else None,
-            "net_weight":     _n(packaging, "NetWeight") if packaging is not None else None,
+            "net_weight":      _n(packaging, "NetWeight")              if packaging is not None else None,
+            "gross_weight":    _n(packaging, "GrossWeight")            if packaging is not None else None,
         })
 
     return header_rows, line_rows, doc_number
@@ -1166,7 +1261,13 @@ def build_raw_export_pa(prod_path, test_path, output_path=None):
     test_label = test_docnum or os.path.basename(test_path)
 
     wb = Workbook()
-    n_line_cols = 10
+
+    pa_line_cols = [
+        "Line #", "MaterialNumber", "MaterialDesc", "EAN", "Unit", "Quantity",
+        "LineItemAmount", "TaxAmount", "TaxableAmount", "TaxRate",
+        "GrossPrice", "NetPrice", "DiscountAmount", "NetWeight", "GrossWeight",
+    ]
+    n_pa_line_cols = len(pa_line_cols)
 
     for label, hdr_rows, line_rows in [
         (prod_label, prod_hdr, prod_lines),
@@ -1200,16 +1301,14 @@ def build_raw_export_pa(prod_path, test_path, output_path=None):
         row += 1
 
         # Line items
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_line_cols)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_pa_line_cols)
         _set(ws.cell(row, 1), "LINE ITEMS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
-        for col in range(2, n_line_cols + 1):
+        for col in range(2, n_pa_line_cols + 1):
             ws.cell(row, col).fill = _fill(SEC_BG)
         ws.row_dimensions[row].height = 20
         row += 1
 
-        for i, title in enumerate(["Line #", "MaterialNumber", "MaterialDesc", "EAN",
-                                    "Unit", "Quantity", "LineItemAmount", "TaxAmount",
-                                    "GrossPrice", "NetPrice"], 1):
+        for i, title in enumerate(pa_line_cols, 1):
             c = ws.cell(row, i, title)
             c.fill = _fill(HDR_BG)
             c.font = _font(9, bold=True, color="FFFFFF")
@@ -1218,24 +1317,30 @@ def build_raw_export_pa(prod_path, test_path, output_path=None):
         ws.row_dimensions[row].height = 18
         row += 1
 
+        center_cols = {1, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
         for r in line_rows:
             for i, v in enumerate([
-                r.get("line_num")      or "",
-                r.get("material_num")  or "",
-                r.get("material_desc") or "",
-                r.get("ean")           or "",
-                r.get("unit")          or "",
-                r.get("quantity")      or "",
-                r.get("line_amount")   or "",
-                r.get("tax_amount")    or "",
-                r.get("gross_price")   or "",
-                r.get("net_price")     or "",
+                r.get("line_num")        or "",
+                r.get("material_num")    or "",
+                r.get("material_desc")   or "",
+                r.get("ean")             or "",
+                r.get("unit")            or "",
+                r.get("quantity")        or "",
+                r.get("line_amount")     or "",
+                r.get("tax_amount")      or "",
+                r.get("taxable_amount")  or "",
+                r.get("tax_rate")        or "",
+                r.get("gross_price")     or "",
+                r.get("net_price")       or "",
+                r.get("discount_amount") or "",
+                r.get("net_weight")      or "",
+                r.get("gross_weight")    or "",
             ], 1):
-                _set(ws.cell(row, i), v, h="center" if i in (1, 6, 7, 8, 9, 10) else "left")
+                _set(ws.cell(row, i), v, h="center" if i in center_cols else "left")
             ws.row_dimensions[row].height = 16
             row += 1
 
-        for i, w in enumerate([8, 22, 28, 18, 10, 12, 16, 14, 14, 14], 1):
+        for i, w in enumerate([6, 22, 28, 18, 10, 12, 16, 14, 14, 12, 14, 14, 16, 12, 12], 1):
             ws.column_dimensions[get_column_letter(i)].width = w
 
     if "Sheet" in wb.sheetnames:
