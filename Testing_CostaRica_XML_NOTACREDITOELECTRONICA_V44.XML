@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<NotaCreditoElectronica xmlns="https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/notaCreditoElectronica">
+    <Clave>50602042600310214990000100001030000014126120260402</Clave>
+    <ProveedorSistemas>3102149900</ProveedorSistemas>
+    <CodigoActividadEmisor>4630.9</CodigoActividadEmisor>
+    <NumeroConsecutivo>00100001030000014126</NumeroConsecutivo>
+    <FechaEmision>2026-02-26T05:44:21</FechaEmision>
+    <Emisor>
+        <Nombre>Mondelez Costa Rica, Ltda.</Nombre>
+        <Identificacion>
+            <Tipo>02</Tipo>
+            <Numero>3102149900</Numero>
+        </Identificacion>
+        <NombreComercial>MONDELEZ COSTA RICA LIMITADA</NombreComercial>
+        <Ubicacion>
+            <Provincia>1</Provincia>
+            <Canton>09</Canton>
+            <Distrito>03</Distrito>
+            <OtrasSenas>Lindora Park Edificio 1, 5to Piso, Via Lindora</OtrasSenas>
+        </Ubicacion>
+        <Telefono>
+            <CodigoPais>506</CodigoPais>
+            <NumTelefono>22046000</NumTelefono>
+        </Telefono>
+        <CorreoElectronico>facturaselectronicascostarica@mdlz.com</CorreoElectronico>
+    </Emisor>
+    <Receptor>
+        <Nombre>COMERCIALIZADORA INTERNACIONAL ALFA</Nombre>
+        <Identificacion>
+            <Tipo>02</Tipo>
+            <Numero>3101679526</Numero>
+        </Identificacion>
+        <NombreComercial>COMERCIALIZADORA INTERNACIONAL ALFA</NombreComercial>
+        <Ubicacion>
+            <Provincia>1</Provincia>
+            <Canton>03</Canton>
+            <Distrito>04</Distrito>
+            <OtrasSenas>SN RAFAEL ARRIBA, DESAMPARADOS.,CARCEL BUEN PASTOR, 300E COMPLEJO</OtrasSenas>
+        </Ubicacion>
+        <Telefono>
+            <CodigoPais>506</CodigoPais>
+            <NumTelefono>40367130</NumTelefono>
+        </Telefono>
+        <CorreoElectronico>ARMONIA.FACTURAELECTRONICA@EDI.CO.CR</CorreoElectronico>
+    </Receptor>
+    <CondicionVenta>02</CondicionVenta>
+    <PlazoCredito>30</PlazoCredito>
+    <DetalleServicio>
+        <LineaDetalle>
+            <NumeroLinea>1</NumeroLinea>
+            <PartidaArancelaria>1905.90.00.0</PartidaArancelaria>
+            <CodigoComercial>
+                <Tipo>01</Tipo>
+                <Codigo>99999</Codigo>
+            </CodigoComercial>
+            <Cantidad>1.000</Cantidad>
+            <UnidadMedida>Otros</UnidadMedida>
+            <TipoTransaccion>01</TipoTransaccion>
+            <UnidadMedidaComercial>CSE</UnidadMedidaComercial>
+            <Detalle>SKU DESCRIPTIOM</Detalle>
+            <PrecioUnitario>10000</PrecioUnitario>
+            <MontoTotal>10000</MontoTotal>
+            <SubTotal>10000</SubTotal>
+            <BaseImponible>1497.72</BaseImponible>
+            <Impuesto>
+                <Codigo>01</Codigo>
+                <CodigoTarifaIVA>02</CodigoTarifaIVA>
+                <Tarifa>1</Tarifa>
+                <Monto>14.98</Monto>
+            </Impuesto>
+            <ImpuestoAsumidoEmisorFabrica>0</ImpuestoAsumidoEmisorFabrica>
+            <ImpuestoNeto>              30.1</ImpuestoNeto>
+            <MontoTotalLinea>10030.16</MontoTotalLinea>
+        </LineaDetalle>
+    </DetalleServicio>
+    <ResumenFactura>
+        <CodigoTipoMoneda>
+            <CodigoMoneda>CRC</CodigoMoneda>
+            <TipoCambio>1.00000</TipoCambio>
+        </CodigoTipoMoneda>
+        <TotalServGravados>0.00</TotalServGravados>
+        <TotalServExentos>0.00</TotalServExentos>
+        <TotalMercanciasGravadas>0.00</TotalMercanciasGravadas>
+        <TotalMercanciasExentas>10000.00</TotalMercanciasExentas>
+        <TotalGravado>0.00</TotalGravado>
+        <TotalExento>10000.00</TotalExento>
+        <TotalVenta>10000</TotalVenta>
+        <TotalDescuentos>0</TotalDescuentos>
+        <TotalVentaNeta>10000</TotalVentaNeta>
+        <TotalDesgloseImpuesto>
+            <Codigo>01</Codigo>
+            <CodigoTarifaIVA>10</CodigoTarifaIVA>
+            <TotalMontoImpuesto>0.00</TotalMontoImpuesto>
+        </TotalDesgloseImpuesto>
+        <TotalDesgloseImpuesto>
+            <Codigo>01</Codigo>
+            <CodigoTarifaIVA>02</CodigoTarifaIVA>
+            <TotalMontoImpuesto>30.16</TotalMontoImpuesto>
+        </TotalDesgloseImpuesto>
+        <TotalImpuesto>30.16</TotalImpuesto>
+        <MedioPago>
+            <TipoMedioPago>04</TipoMedioPago>
+            <TotalMedioPago>10030.16</TotalMedioPago>
+        </MedioPago>
+        <TotalComprobante>10030.16</TotalComprobante>
+    </ResumenFactura>
+    <InformacionReferencia>
+        <Codigo>09</Codigo>
+        <Razon>Nota de credito financiera</Razon>
+    </InformacionReferencia>
+</NotaCreditoElectronica>

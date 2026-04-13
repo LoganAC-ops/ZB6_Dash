@@ -235,7 +235,7 @@ def _banner(ws, row, ecc_name, s4_name):
     row += 1
 
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n)
-    _set(ws.cell(row, 1), "ZB6 Comparison Report",
+    _set(ws.cell(row, 1), "E-Invoicing Comparison Report",
          bg=SEC_BG, size=11, bold=True, color="D8C8FF", h="center")
     ws.row_dimensions[row].height = 20
     row += 1
@@ -1355,18 +1355,363 @@ def build_raw_export_pa(prod_path, test_path, output_path=None):
     return output_path
 
 
+# ─── IDOC Parsing (Uruguay UY02 / Honduras HN02 / Venezuela VE02) ────────────
+
+def parse_file_idoc(filepath):
+    """
+    Parse SAP IDOC HTML report (UY02, HN02, VE02 format).
+    The table has 3 columns: Technical Name | Description | Value.
+    Returns (header_rows, line_rows, doc_number).
+    header_rows: [{field, value}] — all fields from E1EDK* segments
+    line_rows:   [{line_num, quantity, unit, ean, net_amount, unit_price, total}]
+    """
+    with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+        content = f.read()
+
+    def _clean(s):
+        s = re.sub(r'&nbsp;', ' ', s)
+        s = re.sub(r'&#x([0-9a-fA-F]+);', lambda m: chr(int(m.group(1), 16)), s)
+        s = re.sub(r'&amp;', '&', s)
+        s = re.sub(r'<[^>]+>', '', s)
+        s = re.sub(r'\s+', ' ', s)
+        return s.strip()
+
+    # Extract ALL nobr contents (including empty — needed for correct triplet alignment)
+    raw     = re.findall(r'<nobr[^>]*>(.*?)</nobr>', content, re.DOTALL)
+    entries = [_clean(n) for n in raw]
+
+    # First 3 entries = table header row (Technical Name, Description, Value)
+    # Remaining: groups of 3 → (tech_name, description, value)
+    rows = []
+    i = 3
+    while i + 2 < len(entries):
+        tech = entries[i]
+        val  = entries[i + 2]   # entries[i+1] is the description column (unused)
+        rows.append((tech, val))
+        i += 3
+
+    SKIP = {'SEGNUM', 'EDIDC', 'EDIDD', 'STD', 'STDVRS', 'STDMES',
+            'Technical Name', 'Description', 'Value'}
+
+    header_rows = []
+    line_rows   = []
+    doc_number  = None
+
+    in_line  = False
+    cur_line = None
+
+    for tech, val in rows:
+        if not tech or tech in SKIP:
+            continue
+
+        if tech == 'SEGNAM':
+            seg = val
+            if seg == 'E1EDP01':
+                # New line item — save previous
+                if cur_line:
+                    line_rows.append(cur_line)
+                cur_line = {}
+                in_line  = True
+            elif re.match(r'(E1EDK|YOTC.*E1EDK)', seg):
+                # Back to a header segment
+                in_line = False
+            # Other segments (E1EDP02/03/19, YOTC*_E1EDP01, etc.) keep current mode
+            continue
+
+        if in_line:
+            if   tech == 'POSEX':           cur_line['line_num']   = val
+            elif tech == 'MENGE':           cur_line['quantity']   = val
+            elif tech == 'MENEE':           cur_line['unit']       = val
+            # UY (YOTC10664_E1EDP01) extended fields
+            elif tech == 'EAN11':           cur_line.setdefault('ean',        val)
+            elif tech == 'NET_AMOUNT':      cur_line.setdefault('net_amount', val)
+            elif tech == 'UNITPRICE':       cur_line.setdefault('unit_price', val)
+            elif tech == 'MNTTOTAL':        cur_line.setdefault('total',      val)
+            # HN / VE (YOTC_CRCM_E1EDP01) extended fields
+            elif tech == 'YOTC_EAN11':      cur_line.setdefault('ean',        val)
+            elif tech == 'YOTC_AMOUNT':     cur_line.setdefault('net_amount', val)
+            elif tech == 'YOTC_UNIT_PRICE': cur_line.setdefault('unit_price', val)
+            elif tech == 'YOTC_AMOUNT_TAX': cur_line.setdefault('total',      val)
+            elif tech == 'ARKTX':           cur_line.setdefault('material_desc', val)
+        else:
+            if tech == 'BELNR' and not doc_number and val:
+                doc_number = val
+            if val:
+                header_rows.append({'field': tech, 'value': val, 'row_num': None})
+
+    if cur_line:
+        line_rows.append(cur_line)
+
+    return header_rows, line_rows, doc_number
+
+
+def compare_idoc_lines(prod_lines, test_lines):
+    """Compare IDOC line items by POSEX (line number)."""
+    def _key(r):
+        return str(r.get('line_num') or '')
+
+    prod_map, test_map = {}, {}
+    for r in prod_lines:
+        prod_map.setdefault(_key(r), []).append(r)
+    for r in test_lines:
+        test_map.setdefault(_key(r), []).append(r)
+
+    all_keys, seen = [], set()
+    for r in prod_lines:
+        k = _key(r)
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+    for r in test_lines:
+        k = _key(r)
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+
+    results = []
+    for k in all_keys:
+        pl = prod_map.get(k, [])
+        tl = test_map.get(k, [])
+        for i in range(max(len(pl), len(tl))):
+            pr = pl[i] if i < len(pl) else None
+            tr = tl[i] if i < len(tl) else None
+            status = 'match' if (pr and tr) else ('missing_in_s4' if pr else 'extra_in_s4')
+            results.append({'key': k, 'prod': pr, 'test': tr, 'status': status})
+    return results
+
+
+def build_report_idoc(prod_path, test_path, country_name, prefix, output_path=None):
+    """Build Excel comparison report for IDOC countries (UY, HN, VE)."""
+    prod_name = os.path.basename(prod_path)
+    test_name = os.path.basename(test_path)
+
+    prod_hdr, prod_lines, prod_docnum = parse_file_idoc(prod_path)
+    test_hdr, test_lines, test_docnum = parse_file_idoc(test_path)
+
+    prod_label = prod_docnum or prod_name
+    test_label = test_docnum or test_name
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Comparison"
+
+    for i, w in enumerate([28, 32, 32, 18, 18, 16, 16, 16, 16], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    row = 1
+    row = _banner(ws, row, prod_name, test_name)
+    row = _legend(ws, row)
+
+    # ── Section 1: Headers ────────────────────────────────────────────────────
+    hdr_results = compare_headers(prod_hdr, test_hdr)
+    n_match   = sum(1 for r in hdr_results if r['status'] == 'match')
+    n_missing = sum(1 for r in hdr_results if r['status'] == 'missing_in_s4')
+    n_extra   = sum(1 for r in hdr_results if r['status'] == 'extra_in_s4')
+
+    row = _section_hdr(ws, row,
+        f"{country_name.upper()} — SECTION 1: HEADER DETAILS  "
+        f"| Production: {len(prod_hdr)} fields   Testing: {len(test_hdr)} fields   "
+        f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
+        n=4)
+
+    row = _col_hdrs(ws, row, [
+        "FIELD (Technical Name)",
+        f"Production Value\n({prod_label})",
+        f"Testing Value\n({test_label})",
+        "STATUS",
+    ], height=24)
+
+    for item in hdr_results:
+        bg, status_text, fg = _status_style(item['status'])
+        vals   = [item['field'],
+                  item['ecc_value'] if item['ecc_value'] is not None else '—',
+                  item['s4_value']  if item['s4_value']  is not None else '—',
+                  status_text]
+        aligns = ['left', 'left', 'left', 'center']
+        bolds  = [False, False, False, True]
+        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
+            c = ws.cell(row, i, v)
+            c.fill      = _fill(bg)
+            c.font      = _font(10, bold=b, color=(fg if i == 4 else '212121'))
+            c.alignment = _align(h=ha)
+            c.border    = _border()
+        ws.row_dimensions[row].height = 17
+        row += 1
+
+    row += 1
+
+    # ── Section 2: Line Items ─────────────────────────────────────────────────
+    line_results = compare_idoc_lines(prod_lines, test_lines)
+    n_match   = sum(1 for r in line_results if r['status'] == 'match')
+    n_missing = sum(1 for r in line_results if r['status'] == 'missing_in_s4')
+    n_extra   = sum(1 for r in line_results if r['status'] == 'extra_in_s4')
+
+    row = _section_hdr(ws, row,
+        f"{country_name.upper()} — SECTION 2: LINE ITEMS  "
+        f"| Production: {len(prod_lines)} rows   Testing: {len(test_lines)} rows   "
+        f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
+        n=9)
+
+    row = _col_hdrs(ws, row, [
+        "Line #",
+        f"Prod: EAN/Material\n({prod_label})",
+        f"Test: EAN/Material\n({test_label})",
+        "Qty",
+        f"Prod: Net Amount\n({prod_label})",
+        f"Test: Net Amount\n({test_label})",
+        f"Prod: Unit Price\n({prod_label})",
+        f"Test: Unit Price\n({test_label})",
+        "STATUS",
+    ], height=30)
+
+    for item in line_results:
+        bg, status_text, fg = _status_style(item['status'])
+        p = item['prod'] or {}
+        t = item['test'] or {}
+        vals = [
+            str(p.get('line_num')    or t.get('line_num')    or '—'),
+            p.get('ean')             or '—',
+            t.get('ean')             or '—',
+            str(p.get('quantity')    or t.get('quantity')    or '—'),
+            p.get('net_amount')      or '—',
+            t.get('net_amount')      or '—',
+            p.get('unit_price')      or '—',
+            t.get('unit_price')      or '—',
+            status_text,
+        ]
+        aligns = ['center', 'left', 'left', 'center', 'center', 'center', 'center', 'center', 'center']
+        bolds  = [False] * 8 + [True]
+        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
+            c = ws.cell(row, i, v)
+            c.fill      = _fill(bg)
+            c.font      = _font(10, bold=b, color=(fg if i == 9 else '212121'))
+            c.alignment = _align(h=ha)
+            c.border    = _border()
+        ws.row_dimensions[row].height = 17
+        row += 1
+
+    if output_path is None:
+        ts          = datetime.now().strftime('%Y%m%d_%H%M%S')
+        out_dir     = os.path.dirname(os.path.abspath(prod_path))
+        output_path = os.path.join(out_dir, f'{prefix}_Comparison_{ts}.xlsx')
+
+    wb.save(output_path)
+    return output_path
+
+
+def build_raw_export_idoc(prod_path, test_path, country_name, prefix, output_path=None):
+    """Build raw data Excel for IDOC countries (UY, HN, VE)."""
+    prod_hdr, prod_lines, prod_docnum = parse_file_idoc(prod_path)
+    test_hdr, test_lines, test_docnum = parse_file_idoc(test_path)
+
+    prod_label = prod_docnum or os.path.basename(prod_path)
+    test_label = test_docnum or os.path.basename(test_path)
+
+    idoc_line_cols = [
+        "Line #", "EAN/Material", "Quantity", "Unit",
+        "Net Amount", "Unit Price", "Total", "Material Desc",
+    ]
+    n_cols = len(idoc_line_cols)
+
+    wb = Workbook()
+
+    for label, hdr_rows, line_rows in [
+        (prod_label, prod_hdr, prod_lines),
+        (test_label, test_hdr, test_lines),
+    ]:
+        ws  = wb.create_sheet(title=label[:31])
+        row = 1
+
+        # Header fields
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        _set(ws.cell(row, 1), 'HEADER FIELDS', bg=SEC_BG, size=10, bold=True, color='FFFFFF', h='left')
+        ws.cell(row, 2).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for col, title in [(1, 'Technical Name'), (2, 'Value')]:
+            c = ws.cell(row, col, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color='FFFFFF')
+            c.alignment = _align(h='center')
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        for r in hdr_rows:
+            _set(ws.cell(row, 1), r['field'], h='left')
+            _set(ws.cell(row, 2), r['value'], h='left')
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        row += 1
+
+        # Line items
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_cols)
+        _set(ws.cell(row, 1), 'LINE ITEMS', bg=SEC_BG, size=10, bold=True, color='FFFFFF', h='left')
+        for col in range(2, n_cols + 1):
+            ws.cell(row, col).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for i, title in enumerate(idoc_line_cols, 1):
+            c = ws.cell(row, i, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color='FFFFFF')
+            c.alignment = _align(h='center', wrap=True)
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        center_cols = {1, 3, 5, 6, 7}
+        for r in line_rows:
+            for i, v in enumerate([
+                r.get('line_num')      or '',
+                r.get('ean')          or '',
+                r.get('quantity')     or '',
+                r.get('unit')         or '',
+                r.get('net_amount')   or '',
+                r.get('unit_price')   or '',
+                r.get('total')        or '',
+                r.get('material_desc') or '',
+            ], 1):
+                _set(ws.cell(row, i), v, h='center' if i in center_cols else 'left')
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        for i, w in enumerate([8, 22, 10, 8, 16, 16, 16, 28], 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    if 'Sheet' in wb.sheetnames:
+        del wb['Sheet']
+
+    if output_path is None:
+        ts          = datetime.now().strftime('%Y%m%d_%H%M%S')
+        out_dir     = os.path.dirname(os.path.abspath(prod_path))
+        output_path = os.path.join(out_dir, f'{prefix}_RawData_{ts}.xlsx')
+
+    wb.save(output_path)
+    return output_path
+
+
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
 COUNTRY_BUILDERS = {
     "AR": build_report,
     "CR": build_report_cr,
     "PA": build_report_pa,
+    "UY": lambda p, t, o=None: build_report_idoc(p, t, "Uruguay",   "UY", o),
+    "HN": lambda p, t, o=None: build_report_idoc(p, t, "Honduras",  "HN", o),
+    "VE": lambda p, t, o=None: build_report_idoc(p, t, "Venezuela", "VE", o),
 }
 
 COUNTRY_LABELS = {
     "AR": "Argentina",
     "CR": "Costa Rica",
     "PA": "Panama",
+    "UY": "Uruguay (IDOC)",
+    "HN": "Honduras (IDOC)",
+    "VE": "Venezuela (IDOC)",
 }
 
 

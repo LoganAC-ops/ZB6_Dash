@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/logan.mckeown/Documents/Mondelez/**)",
+      "Bash(py -3 ZB6vF2/compare_sap.py \"Book2 - F2.xlsx\" \"Book3 - ZB6.xlsx\")",
+      "Bash(rm -f build_xlsm.py \"SAP Comparison Tool.xlsm\" \"SAP Comparison Tool.spec\" text.tx)",
+      "Bash(rm -rf build/ dist/ __pycache__/)",
+      "Bash(python3 -c ':*)",
+      "Bash(python -c ':*)",
+      "Bash(python -m py_compile app.py)",
+      "Bash(python -m py_compile compare_sap.py)"
+    ]
+  }
+}

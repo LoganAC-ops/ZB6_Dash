@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SAP ECC -> S4 Comparison Tool  |  Streamlit UI
+E-Invoicing Comparison Report  |  Streamlit UI
 Mondelez International | Accenture
 """
 
@@ -15,12 +15,13 @@ from compare_sap import (
     parse_file, compare_headers, compare_line_items, build_report, build_raw_export, check_dates,
     parse_file_cr, compare_cr_lines, build_report_cr, build_raw_export_cr,
     parse_file_pa, compare_pa_lines, build_report_pa, build_raw_export_pa,
+    parse_file_idoc, compare_idoc_lines, build_report_idoc, build_raw_export_idoc,
 )
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="SAP Comparison Tool",
+    page_title="E-Invoicing Comparison Report",
     page_icon="📊",
     layout="wide",
 )
@@ -105,7 +106,7 @@ st.markdown(
             MONDELEZ INTERNATIONAL &nbsp;|&nbsp; ACCENTURE
         </h2>
         <p style="color:#D8C8FF;margin:4px 0 0;font-size:15px">
-            ZB6 Comparison Report
+            E-Invoicing Comparison Report
         </p>
     </div>
     """,
@@ -116,7 +117,14 @@ st.markdown("")
 
 # ─── Country Tabs ─────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3 = st.tabs(["Argentina (ZB6)", "Costa Rica", "Panama"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Argentina (ZB6)",
+    "Costa Rica",
+    "Panama (ZB6)",
+    "Uruguay (UY02 · IDOC)",
+    "Honduras (HN02 · IDOC)",
+    "Venezuela (VE02 · IDOC)",
+])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -312,7 +320,7 @@ with tab1:
 
 with tab2:
 
-    st.markdown("### Costa Rica (NotaCreditoElectronica)")
+    st.markdown("### Costa Rica (?)")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -485,7 +493,7 @@ with tab2:
 
 with tab3:
 
-    st.markdown("### Panama (MT_InvoiceRequest)")
+    st.markdown("### Panama (ZB6)")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -538,7 +546,7 @@ with tab3:
                 os.unlink(prod_path)
                 os.unlink(test_path)
 
-        st.success("Comparison complete — Panama")
+        st.success("Comparison complete — Panama (ZB6)")
 
         render_legend("MISSING IN TESTING", "EXTRA IN TESTING")
         st.markdown("")
@@ -650,3 +658,268 @@ with tab3:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="dl_pa_raw",
                 )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# IDOC TAB HELPER — shared rendering logic for UY / HN / VE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_idoc_tab(country_name, country_upper, prefix, tab_key,
+                     prod_file_obj, test_file_obj, run_btn):
+    """Render the comparison results for an IDOC country tab."""
+
+    if not (run_btn and prod_file_obj and test_file_obj):
+        return
+
+    with st.spinner("Reading and comparing IDOC files..."):
+        prod_path = save_upload(prod_file_obj)
+        test_path = save_upload(test_file_obj)
+
+        try:
+            prod_hdr, prod_lines, prod_docnum = parse_file_idoc(prod_path)
+            test_hdr, test_lines, test_docnum = parse_file_idoc(test_path)
+
+            prod_label = prod_docnum or prod_file_obj.name
+            test_label = test_docnum or test_file_obj.name
+
+            hdr_results  = compare_headers(prod_hdr, test_hdr)
+            line_results = compare_idoc_lines(prod_lines, test_lines)
+
+            ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_dir  = tempfile.gettempdir()
+            out_path = os.path.join(out_dir, f"{prefix}_Comparison_{ts}.xlsx")
+            build_report_idoc(prod_path, test_path, country_name, prefix, output_path=out_path)
+
+            raw_path = os.path.join(out_dir, f"{prefix}_RawData_{ts}.xlsx")
+            build_raw_export_idoc(prod_path, test_path, country_name, prefix, output_path=raw_path)
+
+        finally:
+            os.unlink(prod_path)
+            os.unlink(test_path)
+
+    st.success(f"Comparison complete — {country_name} (IDOC)")
+
+    render_legend("MISSING IN TESTING", "EXTRA IN TESTING")
+    st.markdown("")
+
+    def _style(row):
+        return style_row(row, CR_STATUS_LABELS)
+
+    def _hdr_row(r):
+        return {
+            "Field (Technical Name)":             r["field"],
+            f"Production Value ({prod_label})":   r["ecc_value"] if r["ecc_value"] is not None else "—",
+            f"Testing Value ({test_label})":       r["s4_value"]  if r["s4_value"]  is not None else "—",
+            "Status": CR_STATUS_LABELS[r["status"]],
+        }
+
+    def _line_row(r):
+        p, t = r["prod"] or {}, r["test"] or {}
+        return {
+            "Line #":                                    str(p.get("line_num")   or t.get("line_num")   or "—"),
+            f"Prod: EAN/Material ({prod_label})":        p.get("ean")            or "—",
+            f"Test: EAN/Material ({test_label})":        t.get("ean")            or "—",
+            "Qty":                                       str(p.get("quantity")   or t.get("quantity")   or "—"),
+            f"Prod: Net Amount ({prod_label})":          p.get("net_amount")     or "—",
+            f"Test: Net Amount ({test_label})":          t.get("net_amount")     or "—",
+            f"Prod: Unit Price ({prod_label})":          p.get("unit_price")     or "—",
+            f"Test: Unit Price ({test_label})":          t.get("unit_price")     or "—",
+            "Status": CR_STATUS_LABELS[r["status"]],
+        }
+
+    # Section 1: Headers
+    n_match   = sum(1 for r in hdr_results if r["status"] == "match")
+    n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
+    n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
+    section_banner(
+        f"{country_upper} — SECTION 1: HEADER DETAILS &nbsp;|&nbsp; "
+        f"Production: {len(prod_hdr)} &nbsp; Testing: {len(test_hdr)} &nbsp; "
+        f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
+    )
+
+    hdr_gaps = [r for r in hdr_results if r["status"] != "match"]
+    if hdr_gaps:
+        st.dataframe(
+            pd.DataFrame([_hdr_row(r) for r in hdr_gaps]).style.apply(_style, axis=1),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.success("All header fields match.")
+
+    st.markdown("")
+
+    # Section 2: Line Items
+    n_match   = sum(1 for r in line_results if r["status"] == "match")
+    n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
+    n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
+    section_banner(
+        f"{country_upper} — SECTION 2: LINE ITEMS &nbsp;|&nbsp; "
+        f"Production: {len(prod_lines)} rows &nbsp; Testing: {len(test_lines)} rows &nbsp; "
+        f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
+    )
+
+    line_gaps = [r for r in line_results if r["status"] != "match"]
+    if line_gaps:
+        st.dataframe(
+            pd.DataFrame([_line_row(r) for r in line_gaps]).style.apply(_style, axis=1),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.success("All line items match.")
+
+    st.markdown("")
+
+    with st.expander("Full Combined View — all rows (matched, missing, extra)"):
+        st.markdown("**Header Details**")
+        if hdr_results:
+            st.dataframe(
+                pd.DataFrame([_hdr_row(r) for r in hdr_results]).style.apply(_style, axis=1),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("No header data found.")
+
+        st.markdown("**Line Items**")
+        if line_results:
+            st.dataframe(
+                pd.DataFrame([_line_row(r) for r in line_results]).style.apply(_style, axis=1),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("No line item data found.")
+
+    st.markdown("")
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        with open(out_path, "rb") as f:
+            st.download_button(
+                label="Download Comparison Report",
+                data=f,
+                file_name=os.path.basename(out_path),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_{tab_key}_cmp",
+            )
+    with dl2:
+        with open(raw_path, "rb") as f:
+            st.download_button(
+                label="Download Raw Data",
+                data=f,
+                file_name=os.path.basename(raw_path),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_{tab_key}_raw",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — URUGUAY  (UY02 · IDOC)
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab4:
+
+    st.markdown("### Uruguay (IDOC)")
+    st.caption("Format: IDOC — E1EDK01 / E1EDP01 structure (YOTC10664 extension)")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        prod_file_uy = st.file_uploader(
+            "Production File (baseline)",
+            type=["html", "htm"],
+            help="Production IDOC HTML report from Uruguay (UY02)",
+            key="prod_uy",
+        )
+    with col2:
+        test_file_uy = st.file_uploader(
+            "Testing File (new system)",
+            type=["html", "htm"],
+            help="Testing IDOC HTML report from Uruguay (UY02)",
+            key="test_uy",
+        )
+
+    st.markdown("")
+    run_uy = st.button(
+        "Run Comparison", type="primary",
+        disabled=not (prod_file_uy and test_file_uy),
+        key="run_uy",
+    )
+
+    _render_idoc_tab(
+        country_name="Uruguay", country_upper="URUGUAY", prefix="UY", tab_key="uy",
+        prod_file_obj=prod_file_uy, test_file_obj=test_file_uy, run_btn=run_uy,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — HONDURAS  (HN02 · IDOC)
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab5:
+
+    st.markdown("### Honduras (IDOC)")
+    st.caption("Format: IDOC — E1EDK01 / E1EDP01 structure (YOTC_CRCM extension)")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        prod_file_hn = st.file_uploader(
+            "Production File (baseline)",
+            type=["html", "htm"],
+            help="Production IDOC HTML report from Honduras (HN02)",
+            key="prod_hn",
+        )
+    with col2:
+        test_file_hn = st.file_uploader(
+            "Testing File (new system)",
+            type=["html", "htm"],
+            help="Testing IDOC HTML report from Honduras (HN02)",
+            key="test_hn",
+        )
+
+    st.markdown("")
+    run_hn = st.button(
+        "Run Comparison", type="primary",
+        disabled=not (prod_file_hn and test_file_hn),
+        key="run_hn",
+    )
+
+    _render_idoc_tab(
+        country_name="Honduras", country_upper="HONDURAS", prefix="HN", tab_key="hn",
+        prod_file_obj=prod_file_hn, test_file_obj=test_file_hn, run_btn=run_hn,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — VENEZUELA  (VE02 · IDOC)
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab6:
+
+    st.markdown("### Venezuela (IDOC)")
+    st.caption("Format: IDOC — E1EDK01 / E1EDP01 structure (YOTC_CRCM extension)")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        prod_file_ve = st.file_uploader(
+            "Production File (baseline)",
+            type=["html", "htm"],
+            help="Production IDOC HTML report from Venezuela (VE02)",
+            key="prod_ve",
+        )
+    with col2:
+        test_file_ve = st.file_uploader(
+            "Testing File (new system)",
+            type=["html", "htm"],
+            help="Testing IDOC HTML report from Venezuela (VE02)",
+            key="test_ve",
+        )
+
+    st.markdown("")
+    run_ve = st.button(
+        "Run Comparison", type="primary",
+        disabled=not (prod_file_ve and test_file_ve),
+        key="run_ve",
+    )
+
+    _render_idoc_tab(
+        country_name="Venezuela", country_upper="VENEZUELA", prefix="VE", tab_key="ve",
+        prod_file_obj=prod_file_ve, test_file_obj=test_file_ve, run_btn=run_ve,
+    )
