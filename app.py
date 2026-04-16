@@ -6,7 +6,6 @@ Mondelez International | Accenture
 """
 
 import streamlit as st
-import pandas as pd
 import tempfile
 import os
 from datetime import datetime
@@ -116,14 +115,46 @@ st.markdown(
 
 st.markdown("")
 
+# ─── Tab Styling ───────────────────────────────────────────────────────────────
+
+st.markdown("""
+<style>
+/* ZB6 group — first 3 tabs: subtle blue tint */
+.stTabs [data-baseweb="tab-list"] button:nth-child(1),
+.stTabs [data-baseweb="tab-list"] button:nth-child(2),
+.stTabs [data-baseweb="tab-list"] button:nth-child(3) {
+    background-color: #E8F0FE;
+    border-top: 3px solid #4A90D9;
+    border-radius: 6px 6px 0 0;
+    font-weight: 600;
+}
+/* Costa Rica tab — 4th: neutral */
+.stTabs [data-baseweb="tab-list"] button:nth-child(4) {
+    background-color: #F0F4F0;
+    border-top: 3px solid #88A888;
+    border-radius: 6px 6px 0 0;
+}
+/* IDOC tab — 5th: warm amber tint */
+.stTabs [data-baseweb="tab-list"] button:nth-child(5) {
+    background-color: #FFF8E7;
+    border-top: 3px solid #E6A817;
+    border-radius: 6px 6px 0 0;
+    font-weight: 600;
+}
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ─── Country Tabs ─────────────────────────────────────────────────────────────
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Argentina (ZB6)",
-    "Costa Rica",
     "Panama (ZB6)",
-    "IDOC Countries (UY · HN · VE)",
     "Dominican Republic (ZB6)",
+    "Costa Rica",
+    "IDOC Countries (UY · HN · VE)",
 ])
 
 
@@ -159,140 +190,20 @@ with tab1:
     )
 
     if run_arg and ecc_file and s4_file:
-
-        with st.spinner("Reading and comparing files..."):
+        with st.spinner("Building comparison report..."):
             ecc_path = save_upload(ecc_file)
             s4_path  = save_upload(s4_file)
-
             try:
-                ecc_hdr,  ecc_lines, ecc_docnum = parse_file(ecc_path)
-                s4_hdr,   s4_lines,  s4_docnum  = parse_file(s4_path)
-
-                ecc_label = ecc_docnum or ecc_file.name
-                s4_label  = s4_docnum  or s4_file.name
-
-                hdr_results  = compare_headers(ecc_hdr, s4_hdr)
-                line_results = compare_line_items(ecc_lines, s4_lines)
-
                 ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
                 out_dir  = tempfile.gettempdir()
                 out_path = os.path.join(out_dir, f"ARG_Comparison_{ts}.xlsx")
                 build_report(ecc_path, s4_path, output_path=out_path)
-
                 raw_path = os.path.join(out_dir, f"ARG_RawData_{ts}.xlsx")
                 build_raw_export(ecc_path, s4_path, output_path=raw_path)
-
             finally:
                 os.unlink(ecc_path)
                 os.unlink(s4_path)
-
-        st.success("Comparison complete — Argentina (ZB6)")
-
-        # Date warnings
-        ecc_date_issues = check_dates(ecc_hdr)
-        s4_date_issues  = check_dates(s4_hdr)
-        if ecc_date_issues or s4_date_issues:
-            with st.expander("⚠️ Date Format Warnings — expected YYYYMMDD", expanded=True):
-                if ecc_date_issues:
-                    st.markdown(f"**EWP ({ecc_file.name})**")
-                    for issue in ecc_date_issues:
-                        st.warning(f"`{issue['field']}` → `{issue['value']}`  — not a valid YYYYMMDD date")
-                if s4_date_issues:
-                    st.markdown(f"**S4 ({s4_file.name})**")
-                    for issue in s4_date_issues:
-                        st.warning(f"`{issue['field']}` → `{issue['value']}`  — not a valid YYYYMMDD date")
-
-        render_legend("MISSING IN S4", "EXTRA IN S4")
-        st.markdown("")
-
-        def style_arg(row):
-            return style_row(row, ARG_STATUS_LABELS)
-
-        def make_hdr_row(r):
-            return {
-                "Field (TextTypeCode)":      r["field"],
-                f"EWP Value ({ecc_label})":  r["ecc_value"] if r["ecc_value"] is not None else "—",
-                f"S4 Value ({s4_label})":    r["s4_value"]  if r["s4_value"]  is not None else "—",
-                "Status": ARG_STATUS_LABELS[r["status"]],
-            }
-
-        def make_line_row(r):
-            e, s = r["ecc"] or {}, r["s4"] or {}
-            return {
-                "Line #":                              str(e.get("line_num") or s.get("line_num") or "—"),
-                "Charge Type":                         str(e.get("charge_type") or s.get("charge_type") or "—"),
-                f"EWP: Material ({ecc_label})":        e.get("material_num")  or "—",
-                f"S4: Material ({s4_label})":          s.get("material_num")  or "—",
-                f"EWP: Amount ({ecc_label})":          e.get("amount")        or "—",
-                f"S4: Amount ({s4_label})":            s.get("amount")        or "—",
-                f"EWP: Description ({ecc_label})":     e.get("description")   or "—",
-                f"S4: Description ({s4_label})":       s.get("description")   or "—",
-                "Status": ARG_STATUS_LABELS[r["status"]],
-            }
-
-        # Section 1: Headers
-        n_match   = sum(1 for r in hdr_results if r["status"] == "match")
-        n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
-        n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
-        section_banner(
-            f"ARGENTINA — SECTION 1: HEADER DETAILS &nbsp;|&nbsp; "
-            f"EWP: {len(ecc_hdr)} &nbsp; S4: {len(s4_hdr)} &nbsp; "
-            f"Match: {n_match} &nbsp; Missing in S4: {n_missing} &nbsp; Extra in S4: {n_extra}"
-        )
-
-        hdr_gaps = [r for r in hdr_results if r["status"] != "match"]
-        if hdr_gaps:
-            st.dataframe(
-                pd.DataFrame([make_hdr_row(r) for r in hdr_gaps]).style.apply(style_arg, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.success("All header fields match.")
-
-        st.markdown("")
-
-        # Section 2: Line Items
-        n_match   = sum(1 for r in line_results if r["status"] == "match")
-        n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
-        n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
-        section_banner(
-            f"ARGENTINA — SECTION 2: LINE ITEM / PRICING DETAILS &nbsp;|&nbsp; "
-            f"EWP: {len(ecc_lines)} rows &nbsp; S4: {len(s4_lines)} rows &nbsp; "
-            f"Match: {n_match} &nbsp; Missing in S4: {n_missing} &nbsp; Extra in S4: {n_extra}"
-        )
-
-        line_gaps = [r for r in line_results if r["status"] != "match"]
-        if line_gaps:
-            st.dataframe(
-                pd.DataFrame([make_line_row(r) for r in line_gaps]).style.apply(style_arg, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.success("All line items match.")
-
-        st.markdown("")
-
-        with st.expander("Full Combined View — all rows (matched, missing, extra)"):
-            st.markdown("**Header Details**")
-            if hdr_results:
-                st.dataframe(
-                    pd.DataFrame([make_hdr_row(r) for r in hdr_results]).style.apply(style_arg, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No header data found.")
-
-            st.markdown("**Line Item / Pricing Details**")
-            if line_results:
-                st.dataframe(
-                    pd.DataFrame([make_line_row(r) for r in line_results]).style.apply(style_arg, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No line item data found.")
-
-        st.markdown("")
-
+        st.success("Report ready — Argentina (ZB6)")
         dl1, dl2 = st.columns(2)
         with dl1:
             with open(out_path, "rb") as f:
@@ -318,9 +229,9 @@ with tab1:
 # TAB 2 — COSTA RICA
 # ══════════════════════════════════════════════════════════════════════════════
 
-with tab2:
+with tab4:
 
-    st.markdown("### Costa Rica (?)")
+    st.markdown("### Costa Rica")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -347,151 +258,34 @@ with tab2:
 
     if run_cr and prod_file and test_file:
 
-        with st.spinner("Reading and comparing files..."):
+        with st.spinner("Building comparison report..."):
             prod_path = save_upload(prod_file)
             test_path = save_upload(test_file)
 
             try:
-                prod_hdr, prod_lines, prod_docnum = parse_file_cr(prod_path)
-                test_hdr, test_lines, test_docnum = parse_file_cr(test_path)
-
-                prod_label = prod_docnum or prod_file.name
-                test_label = test_docnum or test_file.name
-
-                hdr_results  = compare_headers(prod_hdr, test_hdr)
-                line_results = compare_cr_lines(prod_lines, test_lines)
-
-                ts        = datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_dir   = tempfile.gettempdir()
-                out_path  = os.path.join(out_dir, f"CR_Comparison_{ts}.xlsx")
+                ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_path = os.path.join(tempfile.gettempdir(), f"CR_Comparison_{ts}.xlsx")
                 build_report_cr(prod_path, test_path, output_path=out_path)
-
-                raw_path = os.path.join(out_dir, f"CR_RawData_{ts}.xlsx")
-                build_raw_export_cr(prod_path, test_path, output_path=raw_path)
-
             finally:
                 os.unlink(prod_path)
                 os.unlink(test_path)
 
-        st.success("Comparison complete — Costa Rica")
-
-        render_legend("MISSING IN TESTING", "EXTRA IN TESTING")
-        st.markdown("")
-
-        def style_cr(row):
-            return style_row(row, CR_STATUS_LABELS)
-
-        def make_hdr_row_cr(r):
-            return {
-                "Field":                              r["field"],
-                f"Production Value ({prod_label})":   r["ecc_value"] if r["ecc_value"] is not None else "—",
-                f"Testing Value ({test_label})":       r["s4_value"]  if r["s4_value"]  is not None else "—",
-                "Status": CR_STATUS_LABELS[r["status"]],
-            }
-
-        def make_line_row_cr(r):
-            p, t = r["prod"] or {}, r["test"] or {}
-            return {
-                "Line #":                                   str(p.get("line_num") or t.get("line_num") or "—"),
-                f"Prod: Cod. Interno ({prod_label})":       p.get("codigo_interno")    or "—",
-                f"Test: Cod. Interno ({test_label})":       t.get("codigo_interno")    or "—",
-                "Detalle":                                  str(p.get("detalle") or t.get("detalle") or "—"),
-                f"Prod: PrecioUnitario ({prod_label})":     p.get("precio_unitario")   or "—",
-                f"Test: PrecioUnitario ({test_label})":     t.get("precio_unitario")   or "—",
-                f"Prod: MontoTotalLinea ({prod_label})":    p.get("monto_total_linea") or "—",
-                f"Test: MontoTotalLinea ({test_label})":    t.get("monto_total_linea") or "—",
-                "Status": CR_STATUS_LABELS[r["status"]],
-            }
-
-        # Section 1: Headers
-        n_match   = sum(1 for r in hdr_results if r["status"] == "match")
-        n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
-        n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
-        section_banner(
-            f"COSTA RICA — SECTION 1: HEADER DETAILS &nbsp;|&nbsp; "
-            f"Production: {len(prod_hdr)} &nbsp; Testing: {len(test_hdr)} &nbsp; "
-            f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
-        )
-
-        hdr_gaps = [r for r in hdr_results if r["status"] != "match"]
-        if hdr_gaps:
-            st.dataframe(
-                pd.DataFrame([make_hdr_row_cr(r) for r in hdr_gaps]).style.apply(style_cr, axis=1),
-                use_container_width=True, hide_index=True,
+        st.success("Report ready — Costa Rica")
+        with open(out_path, "rb") as f:
+            st.download_button(
+                label="Download Comparison Report",
+                data=f,
+                file_name=os.path.basename(out_path),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_cr_cmp",
             )
-        else:
-            st.success("All header fields match.")
-
-        st.markdown("")
-
-        # Section 2: Line Items
-        n_match   = sum(1 for r in line_results if r["status"] == "match")
-        n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
-        n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
-        section_banner(
-            f"COSTA RICA — SECTION 2: LINE ITEMS &nbsp;|&nbsp; "
-            f"Production: {len(prod_lines)} rows &nbsp; Testing: {len(test_lines)} rows &nbsp; "
-            f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
-        )
-
-        line_gaps = [r for r in line_results if r["status"] != "match"]
-        if line_gaps:
-            st.dataframe(
-                pd.DataFrame([make_line_row_cr(r) for r in line_gaps]).style.apply(style_cr, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.success("All line items match.")
-
-        st.markdown("")
-
-        with st.expander("Full Combined View — all rows (matched, missing, extra)"):
-            st.markdown("**Header Details**")
-            if hdr_results:
-                st.dataframe(
-                    pd.DataFrame([make_hdr_row_cr(r) for r in hdr_results]).style.apply(style_cr, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No header data found.")
-
-            st.markdown("**Line Items**")
-            if line_results:
-                st.dataframe(
-                    pd.DataFrame([make_line_row_cr(r) for r in line_results]).style.apply(style_cr, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No line item data found.")
-
-        st.markdown("")
-
-        dl1, dl2 = st.columns(2)
-        with dl1:
-            with open(out_path, "rb") as f:
-                st.download_button(
-                    label="Download Comparison Report",
-                    data=f,
-                    file_name=os.path.basename(out_path),
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="dl_cr_cmp",
-                )
-        with dl2:
-            with open(raw_path, "rb") as f:
-                st.download_button(
-                    label="Download Raw Data",
-                    data=f,
-                    file_name=os.path.basename(raw_path),
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="dl_cr_raw",
-                )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — PANAMA
+# TAB 2 — PANAMA
 # ══════════════════════════════════════════════════════════════════════════════
 
-with tab3:
+with tab2:
 
     st.markdown("### Panama (ZB6)")
 
@@ -519,126 +313,20 @@ with tab3:
     )
 
     if run_pa and prod_file_pa and test_file_pa:
-
-        with st.spinner("Reading and comparing files..."):
+        with st.spinner("Building comparison report..."):
             prod_path = save_upload(prod_file_pa)
             test_path = save_upload(test_file_pa)
-
             try:
-                prod_hdr, prod_lines, prod_docnum = parse_file_pa(prod_path)
-                test_hdr, test_lines, test_docnum = parse_file_pa(test_path)
-
-                prod_label = prod_docnum or prod_file_pa.name
-                test_label = test_docnum or test_file_pa.name
-
-                hdr_results  = compare_headers(prod_hdr, test_hdr)
-                line_results = compare_pa_lines(prod_lines, test_lines)
-
                 ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
                 out_dir  = tempfile.gettempdir()
                 out_path = os.path.join(out_dir, f"PA_Comparison_{ts}.xlsx")
                 build_report_pa(prod_path, test_path, output_path=out_path)
-
                 raw_path = os.path.join(out_dir, f"PA_RawData_{ts}.xlsx")
                 build_raw_export_pa(prod_path, test_path, output_path=raw_path)
-
             finally:
                 os.unlink(prod_path)
                 os.unlink(test_path)
-
-        st.success("Comparison complete — Panama (ZB6)")
-
-        render_legend("MISSING IN TESTING", "EXTRA IN TESTING")
-        st.markdown("")
-
-        def style_pa(row):
-            return style_row(row, CR_STATUS_LABELS)
-
-        def make_hdr_row_pa(r):
-            return {
-                "Field":                              r["field"],
-                f"Production Value ({prod_label})":   r["ecc_value"] if r["ecc_value"] is not None else "—",
-                f"Testing Value ({test_label})":       r["s4_value"]  if r["s4_value"]  is not None else "—",
-                "Status": CR_STATUS_LABELS[r["status"]],
-            }
-
-        def make_line_row_pa(r):
-            p, t = r["prod"] or {}, r["test"] or {}
-            return {
-                "Line #":                                   str(p.get("line_num") or t.get("line_num") or "—"),
-                f"Prod: MaterialNumber ({prod_label})":     p.get("material_num")  or "—",
-                f"Test: MaterialNumber ({test_label})":     t.get("material_num")  or "—",
-                "Material Desc":                            str(p.get("material_desc") or t.get("material_desc") or "—"),
-                f"Prod: LineItemAmount ({prod_label})":     p.get("line_amount")   or "—",
-                f"Test: LineItemAmount ({test_label})":     t.get("line_amount")   or "—",
-                f"Prod: NetPrice ({prod_label})":           p.get("net_price")     or "—",
-                f"Test: NetPrice ({test_label})":           t.get("net_price")     or "—",
-                "Status": CR_STATUS_LABELS[r["status"]],
-            }
-
-        # Section 1: Headers
-        n_match   = sum(1 for r in hdr_results if r["status"] == "match")
-        n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
-        n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
-        section_banner(
-            f"PANAMA — SECTION 1: HEADER DETAILS &nbsp;|&nbsp; "
-            f"Production: {len(prod_hdr)} &nbsp; Testing: {len(test_hdr)} &nbsp; "
-            f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
-        )
-
-        hdr_gaps = [r for r in hdr_results if r["status"] != "match"]
-        if hdr_gaps:
-            st.dataframe(
-                pd.DataFrame([make_hdr_row_pa(r) for r in hdr_gaps]).style.apply(style_pa, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.success("All header fields match.")
-
-        st.markdown("")
-
-        # Section 2: Line Items
-        n_match   = sum(1 for r in line_results if r["status"] == "match")
-        n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
-        n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
-        section_banner(
-            f"PANAMA — SECTION 2: LINE ITEMS &nbsp;|&nbsp; "
-            f"Production: {len(prod_lines)} rows &nbsp; Testing: {len(test_lines)} rows &nbsp; "
-            f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
-        )
-
-        line_gaps = [r for r in line_results if r["status"] != "match"]
-        if line_gaps:
-            st.dataframe(
-                pd.DataFrame([make_line_row_pa(r) for r in line_gaps]).style.apply(style_pa, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.success("All line items match.")
-
-        st.markdown("")
-
-        with st.expander("Full Combined View — all rows (matched, missing, extra)"):
-            st.markdown("**Header Details**")
-            if hdr_results:
-                st.dataframe(
-                    pd.DataFrame([make_hdr_row_pa(r) for r in hdr_results]).style.apply(style_pa, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No header data found.")
-
-            st.markdown("**Line Items**")
-            if line_results:
-                st.dataframe(
-                    pd.DataFrame([make_line_row_pa(r) for r in line_results]).style.apply(style_pa, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No line item data found.")
-
-        st.markdown("")
-
+        st.success("Report ready — Panama (ZB6)")
         dl1, dl2 = st.columns(2)
         with dl1:
             with open(out_path, "rb") as f:
@@ -660,136 +348,23 @@ with tab3:
                 )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# IDOC TAB HELPER — shared rendering logic for UY / HN / VE
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _render_idoc_tab(country_name, country_upper, prefix, tab_key,
-                     prod_file_obj, test_file_obj, run_btn):
-    """Render the comparison results for an IDOC country tab."""
-
+def _render_idoc_tab(country_name, prefix, tab_key, prod_file_obj, test_file_obj, run_btn):
     if not (run_btn and prod_file_obj and test_file_obj):
         return
-
-    with st.spinner("Reading and comparing IDOC files..."):
+    with st.spinner("Building comparison report..."):
         prod_path = save_upload(prod_file_obj)
         test_path = save_upload(test_file_obj)
-
         try:
-            prod_hdr, prod_lines, prod_docnum = parse_file_idoc(prod_path)
-            test_hdr, test_lines, test_docnum = parse_file_idoc(test_path)
-
-            prod_label = prod_docnum or prod_file_obj.name
-            test_label = test_docnum or test_file_obj.name
-
-            hdr_results  = compare_headers(prod_hdr, test_hdr)
-            line_results = compare_idoc_lines(prod_lines, test_lines)
-
             ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_dir  = tempfile.gettempdir()
             out_path = os.path.join(out_dir, f"{prefix}_Comparison_{ts}.xlsx")
             build_report_idoc(prod_path, test_path, country_name, prefix, output_path=out_path)
-
             raw_path = os.path.join(out_dir, f"{prefix}_RawData_{ts}.xlsx")
             build_raw_export_idoc(prod_path, test_path, country_name, prefix, output_path=raw_path)
-
         finally:
             os.unlink(prod_path)
             os.unlink(test_path)
-
-    st.success(f"Comparison complete — {country_name} (IDOC)")
-
-    render_legend("MISSING IN TESTING", "EXTRA IN TESTING")
-    st.markdown("")
-
-    def _style(row):
-        return style_row(row, CR_STATUS_LABELS)
-
-    def _hdr_row(r):
-        return {
-            "Field (Technical Name)":             r["field"],
-            f"Production Value ({prod_label})":   r["ecc_value"] if r["ecc_value"] is not None else "—",
-            f"Testing Value ({test_label})":       r["s4_value"]  if r["s4_value"]  is not None else "—",
-            "Status": CR_STATUS_LABELS[r["status"]],
-        }
-
-    def _line_row(r):
-        p, t = r["prod"] or {}, r["test"] or {}
-        return {
-            "Line #":                                    str(p.get("line_num")   or t.get("line_num")   or "—"),
-            f"Prod: EAN/Material ({prod_label})":        p.get("ean")            or "—",
-            f"Test: EAN/Material ({test_label})":        t.get("ean")            or "—",
-            "Qty":                                       str(p.get("quantity")   or t.get("quantity")   or "—"),
-            f"Prod: Net Amount ({prod_label})":          p.get("net_amount")     or "—",
-            f"Test: Net Amount ({test_label})":          t.get("net_amount")     or "—",
-            f"Prod: Unit Price ({prod_label})":          p.get("unit_price")     or "—",
-            f"Test: Unit Price ({test_label})":          t.get("unit_price")     or "—",
-            "Status": CR_STATUS_LABELS[r["status"]],
-        }
-
-    # Section 1: Headers
-    n_match   = sum(1 for r in hdr_results if r["status"] == "match")
-    n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
-    n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
-    section_banner(
-        f"{country_upper} — SECTION 1: HEADER DETAILS &nbsp;|&nbsp; "
-        f"Production: {len(prod_hdr)} &nbsp; Testing: {len(test_hdr)} &nbsp; "
-        f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
-    )
-
-    hdr_gaps = [r for r in hdr_results if r["status"] != "match"]
-    if hdr_gaps:
-        st.dataframe(
-            pd.DataFrame([_hdr_row(r) for r in hdr_gaps]).style.apply(_style, axis=1),
-            use_container_width=True, hide_index=True,
-        )
-    else:
-        st.success("All header fields match.")
-
-    st.markdown("")
-
-    # Section 2: Line Items
-    n_match   = sum(1 for r in line_results if r["status"] == "match")
-    n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
-    n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
-    section_banner(
-        f"{country_upper} — SECTION 2: LINE ITEMS &nbsp;|&nbsp; "
-        f"Production: {len(prod_lines)} rows &nbsp; Testing: {len(test_lines)} rows &nbsp; "
-        f"Match: {n_match} &nbsp; Missing in Testing: {n_missing} &nbsp; Extra in Testing: {n_extra}"
-    )
-
-    line_gaps = [r for r in line_results if r["status"] != "match"]
-    if line_gaps:
-        st.dataframe(
-            pd.DataFrame([_line_row(r) for r in line_gaps]).style.apply(_style, axis=1),
-            use_container_width=True, hide_index=True,
-        )
-    else:
-        st.success("All line items match.")
-
-    st.markdown("")
-
-    with st.expander("Full Combined View — all rows (matched, missing, extra)"):
-        st.markdown("**Header Details**")
-        if hdr_results:
-            st.dataframe(
-                pd.DataFrame([_hdr_row(r) for r in hdr_results]).style.apply(_style, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.info("No header data found.")
-
-        st.markdown("**Line Items**")
-        if line_results:
-            st.dataframe(
-                pd.DataFrame([_line_row(r) for r in line_results]).style.apply(_style, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.info("No line item data found.")
-
-    st.markdown("")
-
+    st.success(f"Report ready — {country_name} (IDOC)")
     dl1, dl2 = st.columns(2)
     with dl1:
         with open(out_path, "rb") as f:
@@ -812,10 +387,10 @@ def _render_idoc_tab(country_name, country_upper, prefix, tab_key,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — IDOC COUNTRIES  (UY02 · HN02 · VE02)
+# TAB 5 — IDOC COUNTRIES  (UY02 · HN02 · VE02)
 # ══════════════════════════════════════════════════════════════════════════════
 
-with tab4:
+with tab5:
 
     st.markdown("### IDOC Countries")
     st.caption("Format: IDOC — shared base structure (E1EDK01 / E1EDP01) confirmed identical across all countries")
@@ -865,17 +440,17 @@ with tab4:
     )
 
     _render_idoc_tab(
-        country_name=_cname, country_upper=_cupper, prefix=_prefix,
+        country_name=_cname, prefix=_prefix,
         tab_key=f"idoc_{_prefix.lower()}",
         prod_file_obj=prod_file_idoc, test_file_obj=test_file_idoc, run_btn=run_idoc,
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — DOMINICAN REPUBLIC
+# TAB 3 — DOMINICAN REPUBLIC
 # ══════════════════════════════════════════════════════════════════════════════
 
-with tab5:
+with tab3:
 
     st.markdown("### Dominican Republic (ZB6)")
 
@@ -903,140 +478,20 @@ with tab5:
     )
 
     if run_do and ecc_file_do and s4_file_do:
-
-        with st.spinner("Reading and comparing files..."):
+        with st.spinner("Building comparison report..."):
             ecc_path = save_upload(ecc_file_do)
             s4_path  = save_upload(s4_file_do)
-
             try:
-                ecc_hdr,  ecc_lines, ecc_docnum = parse_file_do(ecc_path)
-                s4_hdr,   s4_lines,  s4_docnum  = parse_file_do(s4_path)
-
-                ecc_label = ecc_docnum or ecc_file_do.name
-                s4_label  = s4_docnum  or s4_file_do.name
-
-                hdr_results  = compare_headers(ecc_hdr, s4_hdr)
-                line_results = compare_do_lines(ecc_lines, s4_lines)
-
                 ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
                 out_dir  = tempfile.gettempdir()
                 out_path = os.path.join(out_dir, f"DO_Comparison_{ts}.xlsx")
                 build_report_do(ecc_path, s4_path, output_path=out_path)
-
                 raw_path = os.path.join(out_dir, f"DO_RawData_{ts}.xlsx")
                 build_raw_export_do(ecc_path, s4_path, output_path=raw_path)
-
             finally:
                 os.unlink(ecc_path)
                 os.unlink(s4_path)
-
-        st.success("Comparison complete — Dominican Republic (ZB6)")
-
-        # Date warnings
-        ecc_date_issues = check_dates(ecc_hdr)
-        s4_date_issues  = check_dates(s4_hdr)
-        if ecc_date_issues or s4_date_issues:
-            with st.expander("⚠️ Date Format Warnings — expected YYYYMMDD", expanded=True):
-                if ecc_date_issues:
-                    st.markdown(f"**EWP ({ecc_file_do.name})**")
-                    for issue in ecc_date_issues:
-                        st.warning(f"`{issue['field']}` → `{issue['value']}`  — not a valid YYYYMMDD date")
-                if s4_date_issues:
-                    st.markdown(f"**S4 ({s4_file_do.name})**")
-                    for issue in s4_date_issues:
-                        st.warning(f"`{issue['field']}` → `{issue['value']}`  — not a valid YYYYMMDD date")
-
-        render_legend("MISSING IN S4", "EXTRA IN S4")
-        st.markdown("")
-
-        def style_do(row):
-            return style_row(row, ARG_STATUS_LABELS)
-
-        def make_hdr_row_do(r):
-            return {
-                "Field":                            r["field"],
-                f"EWP Value ({ecc_label})":         r["ecc_value"] if r["ecc_value"] is not None else "—",
-                f"S4 Value ({s4_label})":           r["s4_value"]  if r["s4_value"]  is not None else "—",
-                "Status": ARG_STATUS_LABELS[r["status"]],
-            }
-
-        def make_line_row_do(r):
-            e, s = r["ecc"] or {}, r["s4"] or {}
-            return {
-                "Line #":                                str(e.get("line_num")      or s.get("line_num")      or "—"),
-                f"EWP: MaterialNumber ({ecc_label})":    e.get("material_num")      or "—",
-                f"S4: MaterialNumber ({s4_label})":      s.get("material_num")      or "—",
-                "Material Desc":                         str(e.get("material_desc") or s.get("material_desc") or "—"),
-                f"EWP: LineItemAmount ({ecc_label})":    e.get("line_amount")       or "—",
-                f"S4: LineItemAmount ({s4_label})":      s.get("line_amount")       or "—",
-                f"EWP: GrossPrice ({ecc_label})":        e.get("gross_price")       or "—",
-                f"S4: GrossPrice ({s4_label})":          s.get("gross_price")       or "—",
-                "Status": ARG_STATUS_LABELS[r["status"]],
-            }
-
-        # Section 1: Headers
-        n_match   = sum(1 for r in hdr_results if r["status"] == "match")
-        n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
-        n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
-        section_banner(
-            f"DOMINICAN REPUBLIC — SECTION 1: HEADER DETAILS &nbsp;|&nbsp; "
-            f"EWP: {len(ecc_hdr)} &nbsp; S4: {len(s4_hdr)} &nbsp; "
-            f"Match: {n_match} &nbsp; Missing in S4: {n_missing} &nbsp; Extra in S4: {n_extra}"
-        )
-
-        hdr_gaps = [r for r in hdr_results if r["status"] != "match"]
-        if hdr_gaps:
-            st.dataframe(
-                pd.DataFrame([make_hdr_row_do(r) for r in hdr_gaps]).style.apply(style_do, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.success("All header fields match.")
-
-        st.markdown("")
-
-        # Section 2: Line Items
-        n_match   = sum(1 for r in line_results if r["status"] == "match")
-        n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
-        n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
-        section_banner(
-            f"DOMINICAN REPUBLIC — SECTION 2: LINE ITEM / PRICING DETAILS &nbsp;|&nbsp; "
-            f"EWP: {len(ecc_lines)} rows &nbsp; S4: {len(s4_lines)} rows &nbsp; "
-            f"Match: {n_match} &nbsp; Missing in S4: {n_missing} &nbsp; Extra in S4: {n_extra}"
-        )
-
-        line_gaps = [r for r in line_results if r["status"] != "match"]
-        if line_gaps:
-            st.dataframe(
-                pd.DataFrame([make_line_row_do(r) for r in line_gaps]).style.apply(style_do, axis=1),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.success("All line items match.")
-
-        st.markdown("")
-
-        with st.expander("Full Combined View — all rows (matched, missing, extra)"):
-            st.markdown("**Header Details**")
-            if hdr_results:
-                st.dataframe(
-                    pd.DataFrame([make_hdr_row_do(r) for r in hdr_results]).style.apply(style_do, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No header data found.")
-
-            st.markdown("**Line Item / Pricing Details**")
-            if line_results:
-                st.dataframe(
-                    pd.DataFrame([make_line_row_do(r) for r in line_results]).style.apply(style_do, axis=1),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("No line item data found.")
-
-        st.markdown("")
-
+        st.success("Report ready — Dominican Republic (ZB6)")
         dl1, dl2 = st.columns(2)
         with dl1:
             with open(out_path, "rb") as f:

@@ -296,6 +296,35 @@ def _status_style(status):
     return "FFEBEE", "DIFFERENT", "B71C1C"
 
 
+def _line_field_row(ws, row, field_label, p_val, t_val, line_status):
+    """Write one field row in a field-by-field line item expansion (Mondelez style)."""
+    if line_status == "missing_in_s4":
+        bg, status_text, fg = MISSING_BG, "MISSING IN S4", "7B4600"
+    elif line_status == "extra_in_s4":
+        bg, status_text, fg = EXTRA_BG, "EXTRA IN S4", "0D47A1"
+    else:
+        pv = str(p_val or "").strip()
+        tv = str(t_val or "").strip()
+        if pv == tv:
+            bg, status_text, fg = MATCH_BG, "MATCH", "1B5E20"
+        else:
+            bg, status_text, fg = "FFEBEE", "DIFFERENT", "B71C1C"
+    p_disp = p_val if p_val is not None else "—"
+    t_disp = t_val if t_val is not None else "—"
+    for i, (v, ha, bold) in enumerate(zip(
+        [field_label, p_disp, t_disp, status_text],
+        ["left", "left", "left", "center"],
+        [False, False, False, True],
+    ), 1):
+        c = ws.cell(row, i, v)
+        c.fill      = _fill(bg)
+        c.font      = _font(10, bold=bold, color=(fg if i == 4 else "212121"))
+        c.alignment = _align(h=ha)
+        c.border    = _border()
+    ws.row_dimensions[row].height = 16
+    return row + 1
+
+
 # ─── Report Builder ───────────────────────────────────────────────────────────
 
 def build_report(ecc_path, s4_path, output_path=None):
@@ -319,7 +348,7 @@ def build_report(ecc_path, s4_path, output_path=None):
     ws.title = "Comparison"
 
     # Column widths
-    for i, w in enumerate([22, 30, 30, 18, 18, 14, 14, 14, 16], 1):
+    for i, w in enumerate([28, 35, 35, 14], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     row = 1
@@ -376,53 +405,43 @@ def build_report(ecc_path, s4_path, output_path=None):
     n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
 
     row = _section_hdr(ws, row,
-        f"SECTION 2 — LINE ITEM / PRICING DETAILS  (Cols Z, AA, AB, AC, AK, AM, AN)   "
+        f"SECTION 2 — LINE ITEM / PRICING DETAILS  "
         f"| ECC: {len(ecc_lines)} rows   S4: {len(s4_lines)} rows   "
         f"Match: {n_match}   Missing in S4: {n_missing}   Extra in S4: {n_extra}",
-        n=9)
+        n=4)
 
     row = _col_hdrs(ws, row, [
-        "Line #",
-        "Charge Type",
-        f"ECC: MaterialNumber\n({ecc_label})",
-        f"S4: MaterialNumber\n({s4_label})",
-        f"ECC: Amount\n({ecc_label})",
-        f"S4: Amount\n({s4_label})",
-        f"ECC: Description\n({ecc_label})",
-        f"S4: Description\n({s4_label})",
+        "FIELD",
+        f"ECC Value\n({ecc_label})",
+        f"S4 Value\n({s4_label})",
         "STATUS",
-    ], height=30)
+    ], height=24)
+
+    ARG_LINE_FIELDS = [
+        ("Charge Type",          "charge_type"),
+        ("Material Number",      "material_num"),
+        ("Material Description", "material_desc"),
+        ("Product Description",  "product_desc"),
+        ("Discount Amount",      "discount_amt"),
+        ("Amount",               "amount"),
+        ("Description",          "description"),
+        ("Net Weight",           "net_weight"),
+    ]
 
     if not line_results:
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
         ws.cell(row, 1, "No line item data found in either file.").font = _font(9, italic=True, color="888888")
         row += 1
     else:
         for item in line_results:
-            bg, status_text, fg = _status_style(item["status"])
             e = item["ecc"] or {}
             s = item["s4"]  or {}
-            vals = [
-                str(e.get("line_num")      or s.get("line_num")      or "—"),
-                str(e.get("charge_type")   or s.get("charge_type")   or "—"),
-                e.get("material_num")  or "—",
-                s.get("material_num")  or "—",
-                e.get("amount")        or "—",
-                s.get("amount")        or "—",
-                e.get("description")   or "—",
-                s.get("description")   or "—",
-                status_text,
-            ]
-            aligns = ["center","center","left","left","center","center","left","left","center"]
-            bolds  = [False, True, False, False, False, False, False, False, True]
-            for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
-                c = ws.cell(row, i, v)
-                c.fill      = _fill(bg)
-                c.font      = _font(10, bold=b, color=(fg if i == 9 else "212121"))
-                c.alignment = _align(h=ha)
-                c.border    = _border()
-            ws.row_dimensions[row].height = 17
-            row += 1
+            line_num    = str(e.get("line_num")    or s.get("line_num")    or "?")
+            charge_type = str(e.get("charge_type") or s.get("charge_type") or "")
+            label       = f"LINE ITEM {line_num}" + (f"  |  CHARGE: {charge_type}" if charge_type else "")
+            row = _section_hdr(ws, row, label, n=4)
+            for field_label, key in ARG_LINE_FIELDS:
+                row = _line_field_row(ws, row, field_label, e.get(key), s.get(key), item["status"])
 
     # ── Output ────────────────────────────────────────────────────────────────
     if output_path is None:
@@ -583,9 +602,11 @@ def parse_file_cr(filepath):
         header_rows.append({"field": field, "value": value or "", "row_num": None})
 
     # Emisor
+    emisor_id = emisor.find(".//Identificacion") if emisor is not None else None
     for field, value in [
         ("Emisor - Nombre",               _n(emisor, "Nombre")),
         ("Emisor - NombreComercial",      _n(emisor, "NombreComercial")),
+        ("Emisor - ID Type",              _n(emisor_id, "Tipo")),
         ("Emisor - Identificacion",       _n(emisor, "Numero")),
         ("Emisor - Provincia",            _n(emisor, "Provincia")),
         ("Emisor - Canton",               _n(emisor, "Canton")),
@@ -597,9 +618,11 @@ def parse_file_cr(filepath):
         header_rows.append({"field": field, "value": value or "", "row_num": None})
 
     # Receptor
+    receptor_id = receptor.find(".//Identificacion") if receptor is not None else None
     for field, value in [
         ("Receptor - Nombre",             _n(receptor, "Nombre")),
         ("Receptor - NombreComercial",    _n(receptor, "NombreComercial")),
+        ("Receptor - ID Type",            _n(receptor_id, "Tipo")),
         ("Receptor - Identificacion",     _n(receptor, "Numero")),
         ("Receptor - Provincia",          _n(receptor, "Provincia")),
         ("Receptor - Canton",             _n(receptor, "Canton")),
@@ -640,6 +663,17 @@ def parse_file_cr(filepath):
             ("Razon",     "Referencia - Razon"),
         ]:
             val = _n(ref, tag)
+            if val is not None:
+                header_rows.append({"field": label, "value": val, "row_num": None})
+
+    # TotalDesgloseImpuesto — one block per tax rate
+    for i, block in enumerate(root.findall(".//TotalDesgloseImpuesto"), 1):
+        for label, tag in [
+            (f"Tax Block {i} - Tax Code",        "Codigo"),
+            (f"Tax Block {i} - IVA Rate Code",    "CodigoTarifaIVA"),
+            (f"Tax Block {i} - Total Tax Amount", "TotalMontoImpuesto"),
+        ]:
+            val = _n(block, tag)
             if val is not None:
                 header_rows.append({"field": label, "value": val, "row_num": None})
 
@@ -721,7 +755,11 @@ def compare_cr_lines(prod_lines, test_lines):
 
 
 def build_report_cr(prod_path, test_path, output_path=None):
-    """Build Excel comparison report for Costa Rica."""
+    """
+    Build Excel comparison report for Costa Rica.
+    3 sheets: Header | Line Items | Totals & Reference
+    Each sheet has a Notes column for manual annotations.
+    """
     prod_name = os.path.basename(prod_path)
     test_name = os.path.basename(test_path)
 
@@ -731,104 +769,320 @@ def build_report_cr(prod_path, test_path, output_path=None):
     prod_label = prod_docnum or prod_name
     test_label = test_docnum or test_name
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Comparison"
+    prod_map = {r["field"]: r["value"] for r in prod_hdr}
+    test_map = {r["field"]: r["value"] for r in test_hdr}
 
-    for i, w in enumerate([28, 32, 32, 10, 10, 16, 16, 16, 16], 1):
-        ws.column_dimensions[get_column_letter(i)].width = w
+    # Exact colors from reference file
+    CR_TITLE_BG   = "1F4E79"
+    CR_HDR_BG     = "D6E4F0"
+    CR_HDR_FG     = "1F4E79"
+    CR_SEC_BG     = "2E75B6"
+    CR_ALT_BG     = "F5F9FF"
+    CR_DIFF_BG    = "FFE0E0"
+    CR_DIFF_FG    = "C00000"
+    CR_MATCH_FG   = "375623"
+    CR_BORDER_CLR = "B8CCE4"
+
+    def _cb():
+        s = Side(style="thin", color=CR_BORDER_CLR)
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    def _alt(row):
+        return CR_ALT_BG if row % 2 == 0 else None
+
+    def _write_title(ws, row, title, n):
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n)
+        c = ws.cell(row, 1, title)
+        c.fill = _fill(CR_TITLE_BG)
+        c.font = _font(14, bold=True, color="FFFFFF")
+        c.alignment = _align(h="left")
+        for col in range(2, n + 1):
+            ws.cell(row, col).fill = _fill(CR_TITLE_BG)
+        ws.row_dimensions[row].height = 24
+        return row + 1
+
+    def _write_col_hdrs(ws, row, headers):
+        for i, h in enumerate(headers, 1):
+            c = ws.cell(row, i, h)
+            c.fill = _fill(CR_HDR_BG)
+            c.font = _font(10, bold=True, color=CR_HDR_FG)
+            c.alignment = _align(h="center", wrap=True)
+            c.border = _cb()
+        ws.row_dimensions[row].height = 20
+        return row + 1
+
+    def _write_sec(ws, row, label, n):
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n)
+        c = ws.cell(row, 1, label)
+        c.fill = _fill(CR_SEC_BG)
+        c.font = _font(10, bold=True, color="FFFFFF")
+        c.alignment = _align(h="left")
+        for col in range(2, n + 1):
+            ws.cell(row, col).fill = _fill(CR_SEC_BG)
+        ws.row_dimensions[row].height = 18
+        return row + 1
+
+    def _write_field(ws, row, field_label, p_val, t_val, line_num=None):
+        p_disp  = p_val if p_val is not None else "MISSING"
+        t_disp  = t_val if t_val is not None else "MISSING"
+        matched = (p_disp or "").strip() == (t_disp or "").strip()
+        alt     = _alt(row)
+
+        if matched:
+            status       = "✓" if line_num is not None else "✓ MATCH"
+            test_bg      = alt
+            status_bg    = alt
+            test_color   = "212121"
+            status_color = CR_MATCH_FG
+            status_bold  = False
+        else:
+            status       = "⚠ DIFF"
+            test_bg      = CR_DIFF_BG
+            status_bg    = CR_DIFF_BG
+            test_color   = CR_DIFF_FG
+            status_color = CR_DIFF_FG
+            status_bold  = True
+
+        if line_num is not None:
+            cols = [
+                (line_num,    "center", None,      False, "212121"),
+                (field_label, "left",   alt,       False, "212121"),
+                (p_disp,      "left",   alt,       False, "212121"),
+                (t_disp,      "left",   test_bg,   False, test_color),
+                (status,      "center", status_bg, status_bold, status_color),
+            ]
+        else:
+            cols = [
+                (field_label, "left",   alt,       False, "212121"),
+                (p_disp,      "left",   alt,       False, "212121"),
+                (t_disp,      "left",   test_bg,   False, test_color),
+                (status,      "center", status_bg, status_bold, status_color),
+            ]
+
+        for i, (v, ha, bg, bold, fcolor) in enumerate(cols, 1):
+            c = ws.cell(row, i, v)
+            if bg:
+                c.fill = _fill(bg)
+            c.font      = _font(10, bold=bold, color=fcolor)
+            c.alignment = _align(h=ha)
+            c.border    = _cb()
+        ws.row_dimensions[row].height = 16
+        return row + 1
+
+    wb = Workbook()
+
+    # ── Sheet 1: Header ───────────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Header"
+    N1 = 4
+    for i, w in enumerate([28, 52, 52, 12], 1):
+        ws1.column_dimensions[get_column_letter(i)].width = w
 
     row = 1
-    row = _banner(ws, row, prod_name, test_name)
-    row = _legend(ws, row)
+    row = _write_title(ws1, row, "Credit Note XML Comparison — Header Section", N1)
+    row = _write_col_hdrs(ws1, row, [
+        "Field", f"Production\n({prod_label})", f"Testing\n({test_label})", "Match?"
+    ])
 
-    # ── Section 1: Headers ────────────────────────────────────────────────────
-    hdr_results = compare_headers(prod_hdr, test_hdr)
-    n_match   = sum(1 for r in hdr_results if r["status"] == "match")
-    n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
-    n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
+    row = _write_sec(ws1, row, "DOCUMENT IDENTIFICATION", N1)
+    for label, field in [
+        ("Key (Clave)",        "Clave"),
+        ("Consecutive Number", "NumeroConsecutivo"),
+        ("Emission Date",      "FechaEmision"),
+        ("Activity Code",      "CodigoActividadEmisor"),
+        ("Systems Provider",   "ProveedorSistemas"),
+    ]:
+        row = _write_field(ws1, row, label, prod_map.get(field), test_map.get(field))
 
-    row = _section_hdr(ws, row,
-        f"SECTION 1 — HEADER DETAILS  "
-        f"| Production: {len(prod_hdr)} fields   Testing: {len(test_hdr)} fields   "
-        f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
-        n=4)
+    row = _write_sec(ws1, row, "ISSUER (EMISOR)", N1)
+    for label, field in [
+        ("Name",       "Emisor - Nombre"),
+        ("Trade Name", "Emisor - NombreComercial"),
+        ("ID Type",    "Emisor - ID Type"),
+        ("ID Number",  "Emisor - Identificacion"),
+        ("Email",      "Emisor - CorreoElectronico"),
+        ("Phone",      "Emisor - Telefono"),
+        ("Province",   "Emisor - Provincia"),
+        ("Canton",     "Emisor - Canton"),
+        ("District",   "Emisor - Distrito"),
+        ("Address",    "Emisor - OtrasSenas"),
+    ]:
+        row = _write_field(ws1, row, label, prod_map.get(field), test_map.get(field))
 
-    row = _col_hdrs(ws, row, [
-        "FIELD",
+    row = _write_sec(ws1, row, "RECEIVER (RECEPTOR)", N1)
+    for label, field in [
+        ("Name",       "Receptor - Nombre"),
+        ("Trade Name", "Receptor - NombreComercial"),
+        ("ID Type",    "Receptor - ID Type"),
+        ("ID Number",  "Receptor - Identificacion"),
+        ("Email",      "Receptor - CorreoElectronico"),
+        ("Phone",      "Receptor - Telefono"),
+        ("Province",   "Receptor - Provincia"),
+        ("Canton",     "Receptor - Canton"),
+        ("District",   "Receptor - Distrito"),
+        ("Address",    "Receptor - OtrasSenas"),
+    ]:
+        row = _write_field(ws1, row, label, prod_map.get(field), test_map.get(field))
+
+    row = _write_sec(ws1, row, "SALE CONDITIONS", N1)
+    for label, field in [
+        ("Sale Condition Code", "CondicionVenta"),
+        ("Credit Term (days)",  "PlazoCredito"),
+    ]:
+        row = _write_field(ws1, row, label, prod_map.get(field), test_map.get(field))
+
+    # ── Sheet 2: Line Items ───────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Line Items")
+    N2 = 5
+    for i, w in enumerate([6, 28, 40, 40, 10], 1):
+        ws2.column_dimensions[get_column_letter(i)].width = w
+
+    row = 1
+    row = _write_title(ws2, row, "Credit Note XML Comparison — Line Items", N2)
+    row = _write_col_hdrs(ws2, row, [
+        "#", "Field",
         f"Production Value\n({prod_label})",
-        f"Testing Value\n({test_label})",
-        "STATUS",
-    ], height=24)
+        f"Test Value\n({test_label})",
+        "Match?",
+    ])
 
-    for item in hdr_results:
-        bg, status_text, fg = _status_style(item["status"])
-        vals   = [item["field"],
-                  item["ecc_value"] if item["ecc_value"] is not None else "—",
-                  item["s4_value"]  if item["s4_value"]  is not None else "—",
-                  status_text]
-        aligns = ["left", "left", "left", "center"]
-        bolds  = [False, False, False, True]
-        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
-            c = ws.cell(row, i, v)
-            c.fill      = _fill(bg)
-            c.font      = _font(10, bold=b, color=(fg if i == 4 else "212121"))
-            c.alignment = _align(h=ha)
-            c.border    = _border()
-        ws.row_dimensions[row].height = 17
-        row += 1
+    LINE_FIELDS = [
+        ("CABYS Code",                "codigo_cabys"),
+        ("Customs Tariff",            "partida_arancelaria"),
+        ("Quantity",                  "cantidad"),
+        ("Unit of Measure",           "unidad_medida"),
+        ("Commercial UoM",            "unidad_medida_comercial"),
+        ("Transaction Type",          "tipo_transaccion"),
+        ("Description",               "detalle"),
+        ("Unit Price",                "precio_unitario"),
+        ("Total Amount",              "monto_total"),
+        ("Subtotal",                  "subtotal"),
+        ("Taxable Base",              "base_imponible"),
+        ("Tax Assumed (Fab)",         "impuesto_asumido"),
+        ("Net Tax",                   "impuesto_neto"),
+        ("Line Total",                "monto_total_linea"),
+        ("Commercial Code (Type 01)", "codigo_interno"),
+        ("Commercial Code (Type 03)", "codigo_externo"),
+        ("IVA Rate Code",             "impuesto_codigo_tarifa"),
+        ("Tax Amount",                "impuesto_monto"),
+        ("Tax Code",                  "impuesto_codigo"),
+        ("Tax Rate (%)",              "impuesto_tarifa"),
+    ]
 
-    row += 1
-
-    # ── Section 2: Line Items ─────────────────────────────────────────────────
     line_results = compare_cr_lines(prod_lines, test_lines)
-    n_match   = sum(1 for r in line_results if r["status"] == "match")
-    n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
-    n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
+    for lr in line_results:
+        p = lr["prod"] or {}
+        t = lr["test"] or {}
+        line_num = str(p.get("line_num") or t.get("line_num") or "?")
 
-    row = _section_hdr(ws, row,
-        f"SECTION 2 — LINE ITEMS  "
-        f"| Production: {len(prod_lines)} rows   Testing: {len(test_lines)} rows   "
-        f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
-        n=9)
-
-    row = _col_hdrs(ws, row, [
-        "Line #",
-        f"Prod: Cod. Interno\n({prod_label})",
-        f"Test: Cod. Interno\n({test_label})",
-        "Detalle",
-        f"Prod: PrecioUnitario\n({prod_label})",
-        f"Test: PrecioUnitario\n({test_label})",
-        f"Prod: MontoTotalLinea\n({prod_label})",
-        f"Test: MontoTotalLinea\n({test_label})",
-        "STATUS",
-    ], height=30)
-
-    for item in line_results:
-        bg, status_text, fg = _status_style(item["status"])
-        p = item["prod"] or {}
-        t = item["test"] or {}
-        vals = [
-            str(p.get("line_num")          or t.get("line_num")          or "—"),
-            p.get("codigo_interno")         or "—",
-            t.get("codigo_interno")         or "—",
-            str(p.get("detalle")           or t.get("detalle")           or "—"),
-            p.get("precio_unitario")        or "—",
-            t.get("precio_unitario")        or "—",
-            p.get("monto_total_linea")      or "—",
-            t.get("monto_total_linea")      or "—",
-            status_text,
-        ]
-        aligns = ["center","left","left","left","center","center","center","center","center"]
-        bolds  = [False]*8 + [True]
-        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
-            c = ws.cell(row, i, v)
-            c.fill      = _fill(bg)
-            c.font      = _font(10, bold=b, color=(fg if i == 9 else "212121"))
-            c.alignment = _align(h=ha)
-            c.border    = _border()
-        ws.row_dimensions[row].height = 17
+        ws2.merge_cells(start_row=row, start_column=1, end_row=row, end_column=N2)
+        c = ws2.cell(row, 1, f"LINE ITEM {line_num}")
+        c.fill = _fill(SEC_BG); c.font = _font(10, bold=True, color="FFFFFF")
+        c.alignment = _align(h="left")
+        for col in range(2, N2 + 1):
+            ws2.cell(row, col).fill = _fill(SEC_BG)
+        ws2.row_dimensions[row].height = 18
         row += 1
+
+        for label, key in LINE_FIELDS:
+            if lr["status"] == "missing_in_s4":
+                p_val = p.get(key) or "N/A"
+                t_val = "N/A (no test line)"
+            elif lr["status"] == "extra_in_s4":
+                p_val = "N/A (no prod line)"
+                t_val = t.get(key) or "N/A"
+            else:
+                p_val = p.get(key) or "N/A"
+                t_val = t.get(key) or "N/A"
+            row = _write_field(ws2, row, label, p_val, t_val, line_num=line_num)
+
+    # ── Sheet 3: Totals & Reference ───────────────────────────────────────────
+    ws3 = wb.create_sheet("Totals & Reference")
+    N3 = 4
+    for i, w in enumerate([28, 52, 52, 12], 1):
+        ws3.column_dimensions[get_column_letter(i)].width = w
+
+    row = 1
+    row = _write_title(ws3, row, "Credit Note XML Comparison — Totals & Reference", N3)
+    row = _write_col_hdrs(ws3, row, [
+        "Field", f"Production\n({prod_label})", f"Testing\n({test_label})", "Match?"
+    ])
+
+    row = _write_sec(ws3, row, "CURRENCY", N3)
+    for label, field in [
+        ("Currency Code", "CodigoMoneda"),
+        ("Exchange Rate", "TipoCambio"),
+    ]:
+        row = _write_field(ws3, row, label, prod_map.get(field), test_map.get(field))
+
+    row = _write_sec(ws3, row, "TOTALS SUMMARY", N3)
+    for label, field in [
+        ("Taxable Services Total", "TotalServGravados"),
+        ("Exempt Services Total",  "TotalServExentos"),
+        ("Taxable Goods Total",    "TotalMercanciasGravadas"),
+        ("Exempt Goods Total",     "TotalMercanciasExentas"),
+        ("Total Taxable",          "TotalGravado"),
+        ("Total Exempt",           "TotalExento"),
+        ("Total Sale",             "TotalVenta"),
+        ("Total Discounts",        "TotalDescuentos"),
+        ("Net Sale Total",         "TotalVentaNeta"),
+        ("Total Tax",              "TotalImpuesto"),
+        ("Total Document",         "TotalComprobante"),
+    ]:
+        row = _write_field(ws3, row, label, prod_map.get(field), test_map.get(field))
+
+    row = _write_sec(ws3, row, "TAX BREAKDOWN (TotalDesgloseImpuesto)", N3)
+    tax_block_keys = sorted(
+        {k for k in set(prod_map) | set(test_map) if k.startswith("Tax Block ")},
+        key=lambda k: (int(k.split()[2]), k)
+    )
+    if tax_block_keys:
+        for field in tax_block_keys:
+            row = _write_field(ws3, row, field, prod_map.get(field), test_map.get(field))
+    else:
+        row = _write_field(ws3, row, "(no tax breakdown blocks found)", None, None)
+
+    row = _write_sec(ws3, row, "PAYMENT METHOD", N3)
+    for label, field in [
+        ("Payment Method Code",  "MedioPago - TipoMedioPago"),
+        ("Total Payment Amount", "MedioPago - TotalMedioPago"),
+    ]:
+        row = _write_field(ws3, row, label, prod_map.get(field), test_map.get(field))
+
+    row = _write_sec(ws3, row, "REFERENCE INFORMATION (InformacionReferencia)", N3)
+    for label, field in [
+        ("Referenced Doc Type",   "Referencia - TipoDocIR"),
+        ("Referenced Doc Number", "Referencia - Numero"),
+        ("Referenced Doc Date",   "Referencia - FechaEmisionIR"),
+        ("Reference Code",        "Referencia - Codigo"),
+        ("Reason",                "Referencia - Razon"),
+    ]:
+        row = _write_field(ws3, row, label, prod_map.get(field), test_map.get(field))
+
+    # Catch-all — any parsed field not covered by explicit sections above
+    _explicit = {
+        "Clave","NumeroConsecutivo","FechaEmision","CodigoActividadEmisor","ProveedorSistemas",
+        "Emisor - Nombre","Emisor - NombreComercial","Emisor - ID Type","Emisor - Identificacion",
+        "Emisor - CorreoElectronico","Emisor - Telefono",
+        "Emisor - Provincia","Emisor - Canton","Emisor - Distrito","Emisor - OtrasSenas",
+        "Receptor - Nombre","Receptor - NombreComercial","Receptor - ID Type","Receptor - Identificacion",
+        "Receptor - CorreoElectronico","Receptor - Telefono",
+        "Receptor - Provincia","Receptor - Canton","Receptor - Distrito","Receptor - OtrasSenas",
+        "CondicionVenta","PlazoCredito",
+        "CodigoMoneda","TipoCambio",
+        "TotalServGravados","TotalServExentos","TotalMercanciasGravadas","TotalMercanciasExentas",
+        "TotalGravado","TotalExento","TotalVenta","TotalDescuentos","TotalVentaNeta",
+        "TotalImpuesto","TotalComprobante",
+        "MedioPago - TipoMedioPago","MedioPago - TotalMedioPago",
+        "Referencia - TipoDocIR","Referencia - Numero","Referencia - FechaEmisionIR",
+        "Referencia - Codigo","Referencia - Razon",
+    } | set(tax_block_keys)
+    extra = [k for k in (list(prod_map) + [k for k in test_map if k not in prod_map])
+             if k not in _explicit]
+    if extra:
+        row = _write_sec(ws3, row, "ADDITIONAL FIELDS", N3)
+        for field in extra:
+            row = _write_field(ws3, row, field, prod_map.get(field), test_map.get(field))
 
     if output_path is None:
         ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1148,7 +1402,7 @@ def build_report_pa(prod_path, test_path, output_path=None):
     ws = wb.active
     ws.title = "Comparison"
 
-    for i, w in enumerate([28, 32, 32, 10, 10, 16, 16, 16, 16], 1):
+    for i, w in enumerate([28, 35, 35, 14], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     row = 1
@@ -1203,45 +1457,39 @@ def build_report_pa(prod_path, test_path, output_path=None):
         f"SECTION 2 — LINE ITEMS  "
         f"| Production: {len(prod_lines)} rows   Testing: {len(test_lines)} rows   "
         f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
-        n=9)
+        n=4)
 
     row = _col_hdrs(ws, row, [
-        "Line #",
-        f"Prod: MaterialNumber\n({prod_label})",
-        f"Test: MaterialNumber\n({test_label})",
-        "Material Desc",
-        f"Prod: LineItemAmount\n({prod_label})",
-        f"Test: LineItemAmount\n({test_label})",
-        f"Prod: NetPrice\n({prod_label})",
-        f"Test: NetPrice\n({test_label})",
+        "FIELD",
+        f"Production Value\n({prod_label})",
+        f"Testing Value\n({test_label})",
         "STATUS",
-    ], height=30)
+    ], height=24)
+
+    PA_LINE_FIELDS = [
+        ("Material Number",      "material_num"),
+        ("Material Description", "material_desc"),
+        ("EAN",                  "ean"),
+        ("Unit of Measure",      "unit"),
+        ("Quantity",             "quantity"),
+        ("Line Item Amount",     "line_amount"),
+        ("Tax Amount",           "tax_amount"),
+        ("Taxable Amount",       "taxable_amount"),
+        ("Tax Rate",             "tax_rate"),
+        ("Gross Price",          "gross_price"),
+        ("Net Price",            "net_price"),
+        ("Discount Amount",      "discount_amount"),
+        ("Net Weight",           "net_weight"),
+        ("Gross Weight",         "gross_weight"),
+    ]
 
     for item in line_results:
-        bg, status_text, fg = _status_style(item["status"])
         p = item["prod"] or {}
         t = item["test"] or {}
-        vals = [
-            str(p.get("line_num")      or t.get("line_num")      or "—"),
-            p.get("material_num")      or "—",
-            t.get("material_num")      or "—",
-            str(p.get("material_desc") or t.get("material_desc") or "—"),
-            p.get("line_amount")       or "—",
-            t.get("line_amount")       or "—",
-            p.get("net_price")         or "—",
-            t.get("net_price")         or "—",
-            status_text,
-        ]
-        aligns = ["center","left","left","left","center","center","center","center","center"]
-        bolds  = [False]*8 + [True]
-        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
-            c = ws.cell(row, i, v)
-            c.fill      = _fill(bg)
-            c.font      = _font(10, bold=b, color=(fg if i == 9 else "212121"))
-            c.alignment = _align(h=ha)
-            c.border    = _border()
-        ws.row_dimensions[row].height = 17
-        row += 1
+        line_num = str(p.get("line_num") or t.get("line_num") or "?")
+        row = _section_hdr(ws, row, f"LINE ITEM {line_num}", n=4)
+        for field_label, key in PA_LINE_FIELDS:
+            row = _line_field_row(ws, row, field_label, p.get(key), t.get(key), item["status"])
 
     if output_path is None:
         ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1540,7 +1788,7 @@ def build_report_do(ecc_path, s4_path, output_path=None):
     ws = wb.active
     ws.title = "Comparison"
 
-    for i, w in enumerate([28, 32, 32, 10, 10, 16, 16, 16, 16], 1):
+    for i, w in enumerate([28, 35, 35, 14], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     row = 1
@@ -1595,45 +1843,36 @@ def build_report_do(ecc_path, s4_path, output_path=None):
         f"SECTION 2 — LINE ITEMS  "
         f"| EWP: {len(ecc_lines)} rows   S4: {len(s4_lines)} rows   "
         f"Match: {n_match}   Missing in S4: {n_missing}   Extra in S4: {n_extra}",
-        n=9)
+        n=4)
 
     row = _col_hdrs(ws, row, [
-        "Line #",
-        f"EWP: MaterialNumber\n({ecc_label})",
-        f"S4: MaterialNumber\n({s4_label})",
-        "Material Desc",
-        f"EWP: LineItemAmount\n({ecc_label})",
-        f"S4: LineItemAmount\n({s4_label})",
-        f"EWP: GrossPrice\n({ecc_label})",
-        f"S4: GrossPrice\n({s4_label})",
+        "FIELD",
+        f"EWP Value\n({ecc_label})",
+        f"S4 Value\n({s4_label})",
         "STATUS",
-    ], height=30)
+    ], height=24)
+
+    DO_LINE_FIELDS = [
+        ("Material Number",      "material_num"),
+        ("Material Description", "material_desc"),
+        ("Unit of Measure",      "unit"),
+        ("Quantity",             "quantity"),
+        ("Line Item Amount",     "line_amount"),
+        ("Tax Amount",           "tax_amount"),
+        ("Taxable Amount",       "taxable_amount"),
+        ("Gross Price",          "gross_price"),
+        ("Discount Amount",      "discount_amount"),
+        ("Net Weight",           "net_weight"),
+        ("Gross Weight",         "gross_weight"),
+    ]
 
     for item in line_results:
-        bg, status_text, fg = _status_style(item["status"])
         e = item["ecc"] or {}
         s = item["s4"]  or {}
-        vals = [
-            str(e.get("line_num")      or s.get("line_num")      or "—"),
-            e.get("material_num")      or "—",
-            s.get("material_num")      or "—",
-            str(e.get("material_desc") or s.get("material_desc") or "—"),
-            e.get("line_amount")       or "—",
-            s.get("line_amount")       or "—",
-            e.get("gross_price")       or "—",
-            s.get("gross_price")       or "—",
-            status_text,
-        ]
-        aligns = ["center","left","left","left","center","center","center","center","center"]
-        bolds  = [False]*8 + [True]
-        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
-            c = ws.cell(row, i, v)
-            c.fill      = _fill(bg)
-            c.font      = _font(10, bold=b, color=(fg if i == 9 else "212121"))
-            c.alignment = _align(h=ha)
-            c.border    = _border()
-        ws.row_dimensions[row].height = 17
-        row += 1
+        line_num = str(e.get("line_num") or s.get("line_num") or "?")
+        row = _section_hdr(ws, row, f"LINE ITEM {line_num}", n=4)
+        for field_label, key in DO_LINE_FIELDS:
+            row = _line_field_row(ws, row, field_label, e.get(key), s.get(key), item["status"])
 
     if output_path is None:
         ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1882,7 +2121,7 @@ def build_report_idoc(prod_path, test_path, country_name, prefix, output_path=No
     ws = wb.active
     ws.title = "Comparison"
 
-    for i, w in enumerate([28, 32, 32, 18, 18, 16, 16, 16, 16], 1):
+    for i, w in enumerate([28, 35, 35, 14], 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     row = 1
@@ -1937,45 +2176,32 @@ def build_report_idoc(prod_path, test_path, country_name, prefix, output_path=No
         f"{country_name.upper()} — SECTION 2: LINE ITEMS  "
         f"| Production: {len(prod_lines)} rows   Testing: {len(test_lines)} rows   "
         f"Match: {n_match}   Missing in Testing: {n_missing}   Extra in Testing: {n_extra}",
-        n=9)
+        n=4)
 
     row = _col_hdrs(ws, row, [
-        "Line #",
-        f"Prod: EAN/Material\n({prod_label})",
-        f"Test: EAN/Material\n({test_label})",
-        "Qty",
-        f"Prod: Net Amount\n({prod_label})",
-        f"Test: Net Amount\n({test_label})",
-        f"Prod: Unit Price\n({prod_label})",
-        f"Test: Unit Price\n({test_label})",
+        "FIELD",
+        f"Production Value\n({prod_label})",
+        f"Testing Value\n({test_label})",
         "STATUS",
-    ], height=30)
+    ], height=24)
+
+    IDOC_LINE_FIELDS = [
+        ("EAN / Material",       "ean"),
+        ("Material Description", "material_desc"),
+        ("Quantity",             "quantity"),
+        ("Unit of Measure",      "unit"),
+        ("Net Amount",           "net_amount"),
+        ("Unit Price",           "unit_price"),
+        ("Total",                "total"),
+    ]
 
     for item in line_results:
-        bg, status_text, fg = _status_style(item['status'])
         p = item['prod'] or {}
         t = item['test'] or {}
-        vals = [
-            str(p.get('line_num')    or t.get('line_num')    or '—'),
-            p.get('ean')             or '—',
-            t.get('ean')             or '—',
-            str(p.get('quantity')    or t.get('quantity')    or '—'),
-            p.get('net_amount')      or '—',
-            t.get('net_amount')      or '—',
-            p.get('unit_price')      or '—',
-            t.get('unit_price')      or '—',
-            status_text,
-        ]
-        aligns = ['center', 'left', 'left', 'center', 'center', 'center', 'center', 'center', 'center']
-        bolds  = [False] * 8 + [True]
-        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
-            c = ws.cell(row, i, v)
-            c.fill      = _fill(bg)
-            c.font      = _font(10, bold=b, color=(fg if i == 9 else '212121'))
-            c.alignment = _align(h=ha)
-            c.border    = _border()
-        ws.row_dimensions[row].height = 17
-        row += 1
+        line_num = str(p.get('line_num') or t.get('line_num') or '?')
+        row = _section_hdr(ws, row, f"LINE ITEM {line_num}", n=4)
+        for field_label, key in IDOC_LINE_FIELDS:
+            row = _line_field_row(ws, row, field_label, p.get(key), t.get(key), item['status'])
 
     if output_path is None:
         ts          = datetime.now().strftime('%Y%m%d_%H%M%S')
