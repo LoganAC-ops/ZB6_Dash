@@ -16,6 +16,7 @@ from compare_sap import (
     parse_file_cr, compare_cr_lines, build_report_cr, build_raw_export_cr,
     parse_file_pa, compare_pa_lines, build_report_pa, build_raw_export_pa,
     parse_file_idoc, compare_idoc_lines, build_report_idoc, build_raw_export_idoc,
+    parse_file_do, compare_do_lines, build_report_do, build_raw_export_do,
 )
 
 # ─── Page config ──────────────────────────────────────────────────────────────
@@ -117,11 +118,12 @@ st.markdown("")
 
 # ─── Country Tabs ─────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Argentina (ZB6)",
     "Costa Rica",
     "Panama (ZB6)",
     "IDOC Countries (UY · HN · VE)",
+    "Dominican Republic (ZB6)",
 ])
 
 
@@ -867,3 +869,190 @@ with tab4:
         tab_key=f"idoc_{_prefix.lower()}",
         prod_file_obj=prod_file_idoc, test_file_obj=test_file_idoc, run_btn=run_idoc,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — DOMINICAN REPUBLIC
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab5:
+
+    st.markdown("### Dominican Republic (ZB6)")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        ecc_file_do = st.file_uploader(
+            "EWP File (old system)",
+            type=["xml", "html"],
+            help="XML export from SAP ECC (ZB6)",
+            key="ecc_do",
+        )
+    with col2:
+        s4_file_do = st.file_uploader(
+            "S4 File (new system)",
+            type=["xml", "html"],
+            help="XML export from SAP S4 (F2)",
+            key="s4_do",
+        )
+
+    st.markdown("")
+    run_do = st.button(
+        "Run Comparison", type="primary",
+        disabled=not (ecc_file_do and s4_file_do),
+        key="run_do",
+    )
+
+    if run_do and ecc_file_do and s4_file_do:
+
+        with st.spinner("Reading and comparing files..."):
+            ecc_path = save_upload(ecc_file_do)
+            s4_path  = save_upload(s4_file_do)
+
+            try:
+                ecc_hdr,  ecc_lines, ecc_docnum = parse_file_do(ecc_path)
+                s4_hdr,   s4_lines,  s4_docnum  = parse_file_do(s4_path)
+
+                ecc_label = ecc_docnum or ecc_file_do.name
+                s4_label  = s4_docnum  or s4_file_do.name
+
+                hdr_results  = compare_headers(ecc_hdr, s4_hdr)
+                line_results = compare_do_lines(ecc_lines, s4_lines)
+
+                ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+                out_dir  = tempfile.gettempdir()
+                out_path = os.path.join(out_dir, f"DO_Comparison_{ts}.xlsx")
+                build_report_do(ecc_path, s4_path, output_path=out_path)
+
+                raw_path = os.path.join(out_dir, f"DO_RawData_{ts}.xlsx")
+                build_raw_export_do(ecc_path, s4_path, output_path=raw_path)
+
+            finally:
+                os.unlink(ecc_path)
+                os.unlink(s4_path)
+
+        st.success("Comparison complete — Dominican Republic (ZB6)")
+
+        # Date warnings
+        ecc_date_issues = check_dates(ecc_hdr)
+        s4_date_issues  = check_dates(s4_hdr)
+        if ecc_date_issues or s4_date_issues:
+            with st.expander("⚠️ Date Format Warnings — expected YYYYMMDD", expanded=True):
+                if ecc_date_issues:
+                    st.markdown(f"**EWP ({ecc_file_do.name})**")
+                    for issue in ecc_date_issues:
+                        st.warning(f"`{issue['field']}` → `{issue['value']}`  — not a valid YYYYMMDD date")
+                if s4_date_issues:
+                    st.markdown(f"**S4 ({s4_file_do.name})**")
+                    for issue in s4_date_issues:
+                        st.warning(f"`{issue['field']}` → `{issue['value']}`  — not a valid YYYYMMDD date")
+
+        render_legend("MISSING IN S4", "EXTRA IN S4")
+        st.markdown("")
+
+        def style_do(row):
+            return style_row(row, ARG_STATUS_LABELS)
+
+        def make_hdr_row_do(r):
+            return {
+                "Field":                            r["field"],
+                f"EWP Value ({ecc_label})":         r["ecc_value"] if r["ecc_value"] is not None else "—",
+                f"S4 Value ({s4_label})":           r["s4_value"]  if r["s4_value"]  is not None else "—",
+                "Status": ARG_STATUS_LABELS[r["status"]],
+            }
+
+        def make_line_row_do(r):
+            e, s = r["ecc"] or {}, r["s4"] or {}
+            return {
+                "Line #":                                str(e.get("line_num")      or s.get("line_num")      or "—"),
+                f"EWP: MaterialNumber ({ecc_label})":    e.get("material_num")      or "—",
+                f"S4: MaterialNumber ({s4_label})":      s.get("material_num")      or "—",
+                "Material Desc":                         str(e.get("material_desc") or s.get("material_desc") or "—"),
+                f"EWP: LineItemAmount ({ecc_label})":    e.get("line_amount")       or "—",
+                f"S4: LineItemAmount ({s4_label})":      s.get("line_amount")       or "—",
+                f"EWP: GrossPrice ({ecc_label})":        e.get("gross_price")       or "—",
+                f"S4: GrossPrice ({s4_label})":          s.get("gross_price")       or "—",
+                "Status": ARG_STATUS_LABELS[r["status"]],
+            }
+
+        # Section 1: Headers
+        n_match   = sum(1 for r in hdr_results if r["status"] == "match")
+        n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
+        n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
+        section_banner(
+            f"DOMINICAN REPUBLIC — SECTION 1: HEADER DETAILS &nbsp;|&nbsp; "
+            f"EWP: {len(ecc_hdr)} &nbsp; S4: {len(s4_hdr)} &nbsp; "
+            f"Match: {n_match} &nbsp; Missing in S4: {n_missing} &nbsp; Extra in S4: {n_extra}"
+        )
+
+        hdr_gaps = [r for r in hdr_results if r["status"] != "match"]
+        if hdr_gaps:
+            st.dataframe(
+                pd.DataFrame([make_hdr_row_do(r) for r in hdr_gaps]).style.apply(style_do, axis=1),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.success("All header fields match.")
+
+        st.markdown("")
+
+        # Section 2: Line Items
+        n_match   = sum(1 for r in line_results if r["status"] == "match")
+        n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
+        n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
+        section_banner(
+            f"DOMINICAN REPUBLIC — SECTION 2: LINE ITEM / PRICING DETAILS &nbsp;|&nbsp; "
+            f"EWP: {len(ecc_lines)} rows &nbsp; S4: {len(s4_lines)} rows &nbsp; "
+            f"Match: {n_match} &nbsp; Missing in S4: {n_missing} &nbsp; Extra in S4: {n_extra}"
+        )
+
+        line_gaps = [r for r in line_results if r["status"] != "match"]
+        if line_gaps:
+            st.dataframe(
+                pd.DataFrame([make_line_row_do(r) for r in line_gaps]).style.apply(style_do, axis=1),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.success("All line items match.")
+
+        st.markdown("")
+
+        with st.expander("Full Combined View — all rows (matched, missing, extra)"):
+            st.markdown("**Header Details**")
+            if hdr_results:
+                st.dataframe(
+                    pd.DataFrame([make_hdr_row_do(r) for r in hdr_results]).style.apply(style_do, axis=1),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("No header data found.")
+
+            st.markdown("**Line Item / Pricing Details**")
+            if line_results:
+                st.dataframe(
+                    pd.DataFrame([make_line_row_do(r) for r in line_results]).style.apply(style_do, axis=1),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("No line item data found.")
+
+        st.markdown("")
+
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            with open(out_path, "rb") as f:
+                st.download_button(
+                    label="Download Comparison Report",
+                    data=f,
+                    file_name=os.path.basename(out_path),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_do_cmp",
+                )
+        with dl2:
+            with open(raw_path, "rb") as f:
+                st.download_button(
+                    label="Download Raw Data",
+                    data=f,
+                    file_name=os.path.basename(raw_path),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_do_raw",
+                )

@@ -1355,6 +1355,393 @@ def build_raw_export_pa(prod_path, test_path, output_path=None):
     return output_path
 
 
+# ─── Dominican Republic Parsing ───────────────────────────────────────────────
+
+def parse_file_do(filepath):
+    """
+    Parse Dominican Republic MT_InvoiceRequest XML (ZB6 / F2 format).
+    Header fields sourced from FiscalTexts (TextTypeCode/Text) under
+    HeaderInformationReferences, plus document-level and party fields.
+    Returns (header_rows, line_rows, doc_number).
+    """
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    content = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', '', content)
+    content = re.sub(r'<([\w.-]+):([\w.-]+)', r'<\2', content)
+    content = re.sub(r'</([\w.-]+):([\w.-]+)', r'</\2', content)
+
+    root = ET.fromstring(content)
+
+    def _t(node, tag):
+        el = node.find(f".//{tag}")
+        return el.text.strip() if el is not None and el.text else None
+
+    def _n(node, tag):
+        if node is None:
+            return None
+        el = node.find(f".//{tag}")
+        return el.text.strip() if el is not None and el.text else None
+
+    doc_number  = _t(root, "DocumentNumber")
+    header_rows = []
+
+    # Document-level fields
+    for field, tag in [
+        ("SAPSystem",      "SAPSystem"),
+        ("AreaID",         "AreaID"),
+        ("ExternalNumber", "ExternalNumber"),
+        ("DocumentNumber", "DocumentNumber"),
+        ("CompanyCode",    "CompanyCode"),
+        ("FiscalYear",     "FiscalYear"),
+        ("DocumentType",   "DocumentType"),
+        ("Country",        "Country"),
+        ("CreationDate",   "CreationDate"),
+        ("CreationTime",   "CreationTime"),
+    ]:
+        header_rows.append({"field": field, "value": _t(root, tag) or "", "row_num": None})
+
+    for field, tag in [("RefDocumentNumber", "RefDocumentNumber"), ("RefDocumentReason", "RefDocumentReason")]:
+        val = _t(root, tag)
+        if val is not None:
+            header_rows.append({"field": field, "value": val, "row_num": None})
+
+    # Reference fields and FiscalTexts
+    refs = root.find(".//HeaderInformationReferences")
+    if refs is not None:
+        for field, tag in [
+            ("DocumentDate",          "DocumentDate"),
+            ("ReferencedInvoiceDate", "ReferencedInvoiceDate"),
+            ("PurchaseOrderID",       "PurchaseOrderID"),
+        ]:
+            val = _n(refs, tag)
+            if val is not None:
+                header_rows.append({"field": field, "value": val, "row_num": None})
+
+        for ft in refs.findall("FiscalTexts"):
+            text_type = _n(ft, "TextTypeCode")
+            if text_type:
+                header_rows.append({
+                    "field":   text_type,
+                    "value":   _n(ft, "Text") or "",
+                    "row_num": None,
+                })
+
+    # Party info
+    for party in root.findall(".//HeaderInformationParty"):
+        role = _t(party, "PartyType") or _t(party, "PartyRoleCode") or "Unknown"
+        header_rows.append({"field": f"{role} - PartyID", "value": _t(party, "PartyID") or "", "row_num": None})
+        header_rows.append({"field": f"{role} - Name",    "value": _t(party, "Name")    or "", "row_num": None})
+        addr = _t(party, "Address")
+        if addr:
+            header_rows.append({"field": f"{role} - Address", "value": addr, "row_num": None})
+        add_data = party.find("HeaderInformationPartyAddData")
+        if add_data is not None:
+            for od in add_data.findall("OtherData"):
+                detail = _n(od, "DataDetail")
+                if detail is not None:
+                    header_rows.append({"field": f"{role} - DataDetail", "value": detail, "row_num": None})
+
+    # Payment terms
+    pt = root.find(".//HeaderInformationPaymentTerms")
+    if pt is not None:
+        for field, tag in [("PaymentDate", "PaymentDate"), ("DaysNet", "DaysNet")]:
+            val = _n(pt, tag)
+            if val is not None:
+                header_rows.append({"field": field, "value": val, "row_num": None})
+
+    # Total amounts
+    ta = root.find(".//TotalAmounts")
+    if ta is not None:
+        for field, tag in [
+            ("CurrencyCode",        "CurrencyCode"),
+            ("TaxFeeTypeCode",      "TaxFeeTypeCode"),
+            ("InvoiceAmount",       "InvoiceAmount"),
+            ("TaxAmount",           "TaxAmount"),
+            ("TaxableAmount",       "TaxableAmount"),
+            ("TotalForDiscount",    "TotalForDiscount"),
+            ("TotalDiscountAmount", "TotalDiscountAmount"),
+        ]:
+            val = _n(ta, tag)
+            if val is not None:
+                header_rows.append({"field": field, "value": val, "row_num": None})
+
+    # Line items
+    line_rows = []
+    for li in root.findall(".//LineItemInformation"):
+        pricing   = li.find("LineItemInformationQuantities/LineItemInformationPricingAndAmounts")
+        discounts = li.find(".//LineItemPricingDiscounts")
+        packaging = li.find(".//LineItemInformationPackagingDetails")
+        line_rows.append({
+            "line_num":        _t(li, "LineItemNumber"),
+            "material_num":    _t(li, "MaterialNumber"),
+            "material_desc":   _t(li, "MaterialDescription"),
+            "unit":            _t(li, "MeasureUnitCode"),
+            "quantity":        _t(li, "InvoicedQuantity"),
+            "line_amount":     _n(pricing, "LineItemAmount"),
+            "tax_amount":      _n(pricing, "TaxAmount"),
+            "taxable_amount":  _n(pricing, "TaxableAmount"),
+            "gross_price":     _n(pricing, "ProductGrossPrice"),
+            "discount_amount": _n(discounts, "LineItemDiscountAmount") if discounts is not None else None,
+            "net_weight":      _n(packaging, "NetWeight")              if packaging is not None else None,
+            "gross_weight":    _n(packaging, "GrossWeight")            if packaging is not None else None,
+        })
+
+    return header_rows, line_rows, doc_number
+
+
+def compare_do_lines(ecc_lines, s4_lines):
+    """Compare Dominican Republic line items by LineItemNumber."""
+    def _key(r):
+        return str(r.get("line_num") or "")
+
+    ecc_map, s4_map = {}, {}
+    for r in ecc_lines:
+        ecc_map.setdefault(_key(r), []).append(r)
+    for r in s4_lines:
+        s4_map.setdefault(_key(r), []).append(r)
+
+    all_keys, seen = [], set()
+    for r in ecc_lines:
+        k = _key(r)
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+    for r in s4_lines:
+        k = _key(r)
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+
+    results = []
+    for k in all_keys:
+        ecc_list = ecc_map.get(k, [])
+        s4_list  = s4_map.get(k, [])
+        for i in range(max(len(ecc_list), len(s4_list))):
+            ecc_r  = ecc_list[i] if i < len(ecc_list) else None
+            s4_r   = s4_list[i]  if i < len(s4_list)  else None
+            status = "match" if (ecc_r and s4_r) else ("missing_in_s4" if ecc_r else "extra_in_s4")
+            results.append({"key": k, "ecc": ecc_r, "s4": s4_r, "status": status})
+    return results
+
+
+def build_report_do(ecc_path, s4_path, output_path=None):
+    """Build Excel comparison report for Dominican Republic."""
+    ecc_name = os.path.basename(ecc_path)
+    s4_name  = os.path.basename(s4_path)
+
+    ecc_hdr, ecc_lines, ecc_docnum = parse_file_do(ecc_path)
+    s4_hdr,  s4_lines,  s4_docnum  = parse_file_do(s4_path)
+
+    ecc_label = ecc_docnum or ecc_name
+    s4_label  = s4_docnum  or s4_name
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Comparison"
+
+    for i, w in enumerate([28, 32, 32, 10, 10, 16, 16, 16, 16], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    row = 1
+    row = _banner(ws, row, ecc_name, s4_name)
+    row = _legend(ws, row)
+
+    # Section 1: Headers
+    hdr_results = compare_headers(ecc_hdr, s4_hdr)
+    n_match   = sum(1 for r in hdr_results if r["status"] == "match")
+    n_missing = sum(1 for r in hdr_results if r["status"] == "missing_in_s4")
+    n_extra   = sum(1 for r in hdr_results if r["status"] == "extra_in_s4")
+
+    row = _section_hdr(ws, row,
+        f"SECTION 1 — HEADER DETAILS  "
+        f"| EWP: {len(ecc_hdr)} fields   S4: {len(s4_hdr)} fields   "
+        f"Match: {n_match}   Missing in S4: {n_missing}   Extra in S4: {n_extra}",
+        n=4)
+
+    row = _col_hdrs(ws, row, [
+        "FIELD",
+        f"EWP Value\n({ecc_label})",
+        f"S4 Value\n({s4_label})",
+        "STATUS",
+    ], height=24)
+
+    for item in hdr_results:
+        bg, status_text, fg = _status_style(item["status"])
+        vals   = [item["field"],
+                  item["ecc_value"] if item["ecc_value"] is not None else "—",
+                  item["s4_value"]  if item["s4_value"]  is not None else "—",
+                  status_text]
+        aligns = ["left", "left", "left", "center"]
+        bolds  = [False, False, False, True]
+        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
+            c = ws.cell(row, i, v)
+            c.fill      = _fill(bg)
+            c.font      = _font(10, bold=b, color=(fg if i == 4 else "212121"))
+            c.alignment = _align(h=ha)
+            c.border    = _border()
+        ws.row_dimensions[row].height = 17
+        row += 1
+
+    row += 1
+
+    # Section 2: Line Items
+    line_results = compare_do_lines(ecc_lines, s4_lines)
+    n_match   = sum(1 for r in line_results if r["status"] == "match")
+    n_missing = sum(1 for r in line_results if r["status"] == "missing_in_s4")
+    n_extra   = sum(1 for r in line_results if r["status"] == "extra_in_s4")
+
+    row = _section_hdr(ws, row,
+        f"SECTION 2 — LINE ITEMS  "
+        f"| EWP: {len(ecc_lines)} rows   S4: {len(s4_lines)} rows   "
+        f"Match: {n_match}   Missing in S4: {n_missing}   Extra in S4: {n_extra}",
+        n=9)
+
+    row = _col_hdrs(ws, row, [
+        "Line #",
+        f"EWP: MaterialNumber\n({ecc_label})",
+        f"S4: MaterialNumber\n({s4_label})",
+        "Material Desc",
+        f"EWP: LineItemAmount\n({ecc_label})",
+        f"S4: LineItemAmount\n({s4_label})",
+        f"EWP: GrossPrice\n({ecc_label})",
+        f"S4: GrossPrice\n({s4_label})",
+        "STATUS",
+    ], height=30)
+
+    for item in line_results:
+        bg, status_text, fg = _status_style(item["status"])
+        e = item["ecc"] or {}
+        s = item["s4"]  or {}
+        vals = [
+            str(e.get("line_num")      or s.get("line_num")      or "—"),
+            e.get("material_num")      or "—",
+            s.get("material_num")      or "—",
+            str(e.get("material_desc") or s.get("material_desc") or "—"),
+            e.get("line_amount")       or "—",
+            s.get("line_amount")       or "—",
+            e.get("gross_price")       or "—",
+            s.get("gross_price")       or "—",
+            status_text,
+        ]
+        aligns = ["center","left","left","left","center","center","center","center","center"]
+        bolds  = [False]*8 + [True]
+        for i, (v, ha, b) in enumerate(zip(vals, aligns, bolds), 1):
+            c = ws.cell(row, i, v)
+            c.fill      = _fill(bg)
+            c.font      = _font(10, bold=b, color=(fg if i == 9 else "212121"))
+            c.alignment = _align(h=ha)
+            c.border    = _border()
+        ws.row_dimensions[row].height = 17
+        row += 1
+
+    if output_path is None:
+        ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.dirname(os.path.abspath(ecc_path))
+        output_path = os.path.join(out_dir, f"DO_Comparison_{ts}.xlsx")
+
+    wb.save(output_path)
+    return output_path
+
+
+def build_raw_export_do(ecc_path, s4_path, output_path=None):
+    """Build raw data Excel for Dominican Republic (two sheets, one per file)."""
+    ecc_hdr, ecc_lines, ecc_docnum = parse_file_do(ecc_path)
+    s4_hdr,  s4_lines,  s4_docnum  = parse_file_do(s4_path)
+
+    ecc_label = ecc_docnum or os.path.basename(ecc_path)
+    s4_label  = s4_docnum  or os.path.basename(s4_path)
+
+    wb = Workbook()
+
+    do_line_cols = [
+        "Line #", "MaterialNumber", "MaterialDesc", "Unit", "Quantity",
+        "LineItemAmount", "TaxAmount", "TaxableAmount",
+        "GrossPrice", "DiscountAmount", "NetWeight", "GrossWeight",
+    ]
+    n_cols = len(do_line_cols)
+
+    for label, hdr_rows, line_rows in [
+        (ecc_label, ecc_hdr, ecc_lines),
+        (s4_label,  s4_hdr,  s4_lines),
+    ]:
+        ws = wb.create_sheet(title=label[:31])
+        row = 1
+
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        _set(ws.cell(row, 1), "HEADER FIELDS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
+        ws.cell(row, 2).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for col, title in [(1, "Field"), (2, "Value")]:
+            c = ws.cell(row, col, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color="FFFFFF")
+            c.alignment = _align(h="center")
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        for r in hdr_rows:
+            _set(ws.cell(row, 1), r["field"], h="left")
+            _set(ws.cell(row, 2), r["value"], h="left")
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        row += 1
+
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=n_cols)
+        _set(ws.cell(row, 1), "LINE ITEMS", bg=SEC_BG, size=10, bold=True, color="FFFFFF", h="left")
+        for col in range(2, n_cols + 1):
+            ws.cell(row, col).fill = _fill(SEC_BG)
+        ws.row_dimensions[row].height = 20
+        row += 1
+
+        for i, title in enumerate(do_line_cols, 1):
+            c = ws.cell(row, i, title)
+            c.fill = _fill(HDR_BG)
+            c.font = _font(9, bold=True, color="FFFFFF")
+            c.alignment = _align(h="center", wrap=True)
+            c.border = _border()
+        ws.row_dimensions[row].height = 18
+        row += 1
+
+        center_cols = {1, 5, 6, 7, 8, 9, 10, 11, 12}
+        for r in line_rows:
+            for i, v in enumerate([
+                r.get("line_num")        or "",
+                r.get("material_num")    or "",
+                r.get("material_desc")   or "",
+                r.get("unit")            or "",
+                r.get("quantity")        or "",
+                r.get("line_amount")     or "",
+                r.get("tax_amount")      or "",
+                r.get("taxable_amount")  or "",
+                r.get("gross_price")     or "",
+                r.get("discount_amount") or "",
+                r.get("net_weight")      or "",
+                r.get("gross_weight")    or "",
+            ], 1):
+                _set(ws.cell(row, i), v, h="center" if i in center_cols else "left")
+            ws.row_dimensions[row].height = 16
+            row += 1
+
+        for i, w in enumerate([6, 22, 28, 10, 12, 16, 14, 14, 14, 16, 12, 12], 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
+
+    if output_path is None:
+        ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.dirname(os.path.abspath(ecc_path))
+        output_path = os.path.join(out_dir, f"DO_RawData_{ts}.xlsx")
+
+    wb.save(output_path)
+    return output_path
+
+
 # ─── IDOC Parsing (Uruguay UY02 / Honduras HN02 / Venezuela VE02) ────────────
 
 def parse_file_idoc(filepath):
