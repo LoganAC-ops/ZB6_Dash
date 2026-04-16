@@ -117,13 +117,11 @@ st.markdown("")
 
 # ─── Country Tabs ─────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "Argentina (ZB6)",
     "Costa Rica",
     "Panama (ZB6)",
-    "Uruguay (UY02 · IDOC)",
-    "Honduras (HN02 · IDOC)",
-    "Venezuela (VE02 · IDOC)",
+    "IDOC Countries (UY · HN · VE)",
 ])
 
 
@@ -812,114 +810,60 @@ def _render_idoc_tab(country_name, country_upper, prefix, tab_key,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — URUGUAY  (UY02 · IDOC)
+# TAB 4 — IDOC COUNTRIES  (UY02 · HN02 · VE02)
 # ══════════════════════════════════════════════════════════════════════════════
 
 with tab4:
 
-    st.markdown("### Uruguay (IDOC)")
-    st.caption("Format: IDOC — E1EDK01 / E1EDP01 structure (YOTC10664 extension)")
+    st.markdown("### IDOC Countries")
+    st.caption("Format: IDOC — shared base structure (E1EDK01 / E1EDP01) confirmed identical across all countries")
+
+    st.info(
+        "**Supported countries (all use the same IDOC base format):**  \n"
+        "🇺🇾 Uruguay (UY02) &nbsp;·&nbsp; "
+        "🇭🇳 Honduras (HN02) &nbsp;·&nbsp; "
+        "🇻🇪 Venezuela (VE02)"
+    )
+
+    _IDOC_COUNTRIES = {
+        "Uruguay (UY02)":   ("Uruguay",   "URUGUAY",   "UY"),
+        "Honduras (HN02)":  ("Honduras",  "HONDURAS",  "HN"),
+        "Venezuela (VE02)": ("Venezuela", "VENEZUELA", "VE"),
+    }
+
+    idoc_country = st.selectbox(
+        "Select Country",
+        list(_IDOC_COUNTRIES.keys()),
+        key="idoc_country_select",
+    )
+
+    _cname, _cupper, _prefix = _IDOC_COUNTRIES[idoc_country]
 
     col1, col2 = st.columns(2)
     with col1:
-        prod_file_uy = st.file_uploader(
+        prod_file_idoc = st.file_uploader(
             "Production File (baseline)",
             type=["html", "htm"],
-            help="Production IDOC HTML report from Uruguay (UY02)",
-            key="prod_uy",
+            help=f"Production IDOC HTML report from {_cname}",
+            key=f"prod_idoc_{_prefix}",
         )
     with col2:
-        test_file_uy = st.file_uploader(
+        test_file_idoc = st.file_uploader(
             "Testing File (new system)",
             type=["html", "htm"],
-            help="Testing IDOC HTML report from Uruguay (UY02)",
-            key="test_uy",
+            help=f"Testing IDOC HTML report from {_cname}",
+            key=f"test_idoc_{_prefix}",
         )
 
     st.markdown("")
-    run_uy = st.button(
+    run_idoc = st.button(
         "Run Comparison", type="primary",
-        disabled=not (prod_file_uy and test_file_uy),
-        key="run_uy",
+        disabled=not (prod_file_idoc and test_file_idoc),
+        key=f"run_idoc_{_prefix}",
     )
 
     _render_idoc_tab(
-        country_name="Uruguay", country_upper="URUGUAY", prefix="UY", tab_key="uy",
-        prod_file_obj=prod_file_uy, test_file_obj=test_file_uy, run_btn=run_uy,
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — HONDURAS  (HN02 · IDOC)
-# ══════════════════════════════════════════════════════════════════════════════
-
-with tab5:
-
-    st.markdown("### Honduras (IDOC)")
-    st.caption("Format: IDOC — E1EDK01 / E1EDP01 structure (YOTC_CRCM extension)")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        prod_file_hn = st.file_uploader(
-            "Production File (baseline)",
-            type=["html", "htm"],
-            help="Production IDOC HTML report from Honduras (HN02)",
-            key="prod_hn",
-        )
-    with col2:
-        test_file_hn = st.file_uploader(
-            "Testing File (new system)",
-            type=["html", "htm"],
-            help="Testing IDOC HTML report from Honduras (HN02)",
-            key="test_hn",
-        )
-
-    st.markdown("")
-    run_hn = st.button(
-        "Run Comparison", type="primary",
-        disabled=not (prod_file_hn and test_file_hn),
-        key="run_hn",
-    )
-
-    _render_idoc_tab(
-        country_name="Honduras", country_upper="HONDURAS", prefix="HN", tab_key="hn",
-        prod_file_obj=prod_file_hn, test_file_obj=test_file_hn, run_btn=run_hn,
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — VENEZUELA  (VE02 · IDOC)
-# ══════════════════════════════════════════════════════════════════════════════
-
-with tab6:
-
-    st.markdown("### Venezuela (IDOC)")
-    st.caption("Format: IDOC — E1EDK01 / E1EDP01 structure (YOTC_CRCM extension)")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        prod_file_ve = st.file_uploader(
-            "Production File (baseline)",
-            type=["html", "htm"],
-            help="Production IDOC HTML report from Venezuela (VE02)",
-            key="prod_ve",
-        )
-    with col2:
-        test_file_ve = st.file_uploader(
-            "Testing File (new system)",
-            type=["html", "htm"],
-            help="Testing IDOC HTML report from Venezuela (VE02)",
-            key="test_ve",
-        )
-
-    st.markdown("")
-    run_ve = st.button(
-        "Run Comparison", type="primary",
-        disabled=not (prod_file_ve and test_file_ve),
-        key="run_ve",
-    )
-
-    _render_idoc_tab(
-        country_name="Venezuela", country_upper="VENEZUELA", prefix="VE", tab_key="ve",
-        prod_file_obj=prod_file_ve, test_file_obj=test_file_ve, run_btn=run_ve,
+        country_name=_cname, country_upper=_cupper, prefix=_prefix,
+        tab_key=f"idoc_{_prefix.lower()}",
+        prod_file_obj=prod_file_idoc, test_file_obj=test_file_idoc, run_btn=run_idoc,
     )
